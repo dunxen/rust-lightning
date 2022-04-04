@@ -696,6 +696,58 @@ where L::Target: Logger {
 		return Err(LightningError{err: "Cannot generate a route to ourselves".to_owned(), action: ErrorAction::IgnoreError});
 	}
 
+	get_route_internal(
+		our_node_pubkey, payment_params, network_graph, first_hops, final_value_msat,
+		final_cltv_expiry_delta, logger, scorer, random_seed_bytes,
+	)
+}
+
+pub(crate) fn get_rebalancing_route<L: Deref, S: Score>(
+	our_node_pubkey: &PublicKey, network_graph: &ReadOnlyNetworkGraph, outgoing_channel: &ChannelDetails,
+	incoming_channel: &ChannelDetails, fee_limit: u64, logger: L,
+	scorer: &S, random_seed_bytes: &[u8; 32]
+) -> Result<Route, LightningError>
+where L::Target: Logger {
+	if outgoing_channel.short_channel_id.is_none() || incoming_channel.short_channel_id.is_none() {
+		return Err(LightningError{err: "Cannot use a pending channel for incoming or outgoing channel".to_owned(), action: ErrorAction::IgnoreError});
+	}
+
+	if incoming_channel.counterparty.forwarding_info.is_none() {
+		return Err(LightningError{err: "No forwarding info for incoming channel".to_owned(), action: ErrorAction::IgnoreError})
+	}
+
+	let incoming_forwarding_info = incoming_channel.counterparty.forwarding_info.as_ref().unwrap();
+	let final_cltv_expiry_delta = incoming_forwarding_info.cltv_expiry_delta as u32;
+
+	let first_hops = [outgoing_channel];
+	let mut payment_params = PaymentParameters::from_node_id(*our_node_pubkey);
+	payment_params.route_hints = vec![RouteHint(vec![RouteHintHop {
+		src_node_id: incoming_channel.counterparty.node_id,
+		short_channel_id: incoming_channel.short_channel_id.unwrap(),
+		htlc_minimum_msat: incoming_channel.inbound_htlc_minimum_msat,
+		htlc_maximum_msat: incoming_channel.inbound_htlc_maximum_msat,
+		cltv_expiry_delta: final_cltv_expiry_delta as u16,
+		fees: RoutingFees {
+			base_msat: incoming_forwarding_info.fee_base_msat,
+			proportional_millionths: incoming_forwarding_info.fee_proportional_millionths
+		}
+	}])];
+
+	get_route_internal(
+		our_node_pubkey, &payment_params, network_graph, Some(&first_hops[..]), 12,
+		final_cltv_expiry_delta, logger, scorer, random_seed_bytes,
+	)
+}
+
+fn get_route_internal<L: Deref, S: Score>(
+	our_node_pubkey: &PublicKey, payment_params: &PaymentParameters, network_graph: &ReadOnlyNetworkGraph,
+	first_hops: Option<&[&ChannelDetails]>, final_value_msat: u64, final_cltv_expiry_delta: u32,
+	logger: L, scorer: &S, random_seed_bytes: &[u8; 32]
+) -> Result<Route, LightningError>
+where L::Target: Logger {
+	let payee_node_id = NodeId::from_pubkey(&payment_params.payee_pubkey);
+	let our_node_id = NodeId::from_pubkey(our_node_pubkey);
+
 	if final_value_msat > MAX_VALUE_MSAT {
 		return Err(LightningError{err: "Cannot generate a route of more value than all existing satoshis".to_owned(), action: ErrorAction::IgnoreError});
 	}
@@ -1859,7 +1911,7 @@ fn build_route_from_hops_internal<L: Deref>(
 #[cfg(test)]
 mod tests {
 	use routing::network_graph::{NetworkGraph, NetGraphMsgHandler, NodeId};
-	use routing::router::{get_route, build_route_from_hops_internal, add_random_cltv_offset, default_node_features,
+	use routing::router::{get_rebalancing_route, get_route, build_route_from_hops_internal, add_random_cltv_offset, default_node_features,
 		PaymentParameters, Route, RouteHint, RouteHintHop, RouteHop, RoutingFees,
 		DEFAULT_MAX_TOTAL_CLTV_EXPIRY_DELTA, MAX_PATH_LENGTH_ESTIMATE};
 	use routing::scoring::{ChannelUsage, Score};
