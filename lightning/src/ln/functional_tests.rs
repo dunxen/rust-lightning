@@ -10336,37 +10336,43 @@ fn test_max_dust_htlc_exposure() {
 fn test_circular_rebalance() {
 	let chanmon_cfgs = create_chanmon_cfgs(4);
 	let node_cfgs = create_node_cfgs(4, &chanmon_cfgs);
-	let node_chanmgrs = create_node_chanmgrs(4, &node_cfgs, &[None, None]);
+	let node_chanmgrs = create_node_chanmgrs(4, &node_cfgs, &[None, None, None, None]);
 	let nodes = create_network(4, &node_cfgs, &node_chanmgrs);
 
 	let our_pubkey = nodes[0].node.get_our_node_id();
 	nodes[0].node.peer_connected(&our_pubkey, &msgs::Init { features: InitFeatures::known(), remote_network_address: None });
 	nodes[1].node.peer_connected(&nodes[0].node.get_our_node_id(), &msgs::Init { features: InitFeatures::known(), remote_network_address: None });
+	let channel_value = 1_000_000;
+	let push_sats = 500_000;
 
-	let _chan = create_chan_between_nodes(&nodes[0], &nodes[1], InitFeatures::known(), InitFeatures::known());
-	let _chan = create_chan_between_nodes(&nodes[1], &nodes[2], InitFeatures::known(), InitFeatures::known());
-	let _chan = create_chan_between_nodes(&nodes[2], &nodes[3], InitFeatures::known(), InitFeatures::known());
-	let _chan = create_chan_between_nodes(&nodes[3], &nodes[0], InitFeatures::known(), InitFeatures::known());
+	let _chan = create_announced_chan_between_nodes_with_value(&nodes, 0, 1, 1_000_000, push_sats * 1000, InitFeatures::known(), InitFeatures::known());
+	let _chan = create_announced_chan_between_nodes_with_value(&nodes, 1, 2, 1_000_000, push_sats * 1000, InitFeatures::known(), InitFeatures::known());
+	let _chan = create_announced_chan_between_nodes_with_value(&nodes, 2, 3, 1_000_000, push_sats * 1000, InitFeatures::known(), InitFeatures::known());
+	let _chan = create_announced_chan_between_nodes_with_value(&nodes, 3, 0, 1_000_000, push_sats * 1000, InitFeatures::known(), InitFeatures::known());
 
-	let channels = node_chanmgrs[0].list_channels();
+	// We'll sort our two channels so the higher outbound balance channel is first
+	let mut channels = node_chanmgrs[0].list_channels().clone();
+	channels.sort_by(|a, b| b.balance_msat.cmp(&a.balance_msat));
 
 	let network_graph = nodes[0].network_graph.read_only();
 	let first_hops = nodes[0].node.list_usable_channels();
 	let scorer = test_utils::TestScorer::with_penalty(0);
-	let random_seed_bytes = chanmon_cfgs[1].keys_manager.get_secure_random_bytes();
-	let path = get_rebalancing_route(
-		&our_pubkey, &network_graph, &channels[0],
-		&channels[1], 0, nodes[0].logger,
-		&scorer, &random_seed_bytes
-	).unwrap().paths[0];
+	let random_seed_bytes = chanmon_cfgs[0].keys_manager.get_secure_random_bytes();
+	let rebalance_amount = 5_000;
+	let route = get_rebalancing_route(
+		&our_pubkey, &network_graph, &channels[0], &channels[1], nodes[0].logger, &scorer,
+		&random_seed_bytes, rebalance_amount
+	).unwrap();
 
 	let test_preimage = PaymentPreimage([42; 32]);
 	let payment_hash = PaymentHash(Sha256::hash(&test_preimage.0[..]).into_inner());
 	let payment_secret = nodes[0].node.create_inbound_payment_for_hash(payment_hash, None, 3600).unwrap();
-	let mut events = nodes[0].node.get_and_clear_pending_msg_events();
-	assert_eq!(events.len(), 1);
-	let event = events.pop().unwrap();
-	let path = vec![&nodes[1], &nodes[2], &nodes[3], &nodes[0]];
-	pass_along_path(&nodes[0], &path, 100000, payment_hash, Some(payment_secret), event, true, Some(test_preimage));
-	claim_payment(&nodes[0], &path, test_preimage);
+	let expected_path = &[&nodes[3], &nodes[2], &nodes[1]];
+
+	send_along_route_with_secret(
+		&nodes[0], route, &[expected_path], rebalance_amount,
+		payment_hash, payment_secret
+	);
+
+	claim_payment(&nodes[0], expected_path, test_preimage);
 }

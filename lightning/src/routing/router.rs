@@ -703,9 +703,9 @@ where L::Target: Logger {
 }
 
 pub(crate) fn get_rebalancing_route<L: Deref, S: Score>(
-	our_node_pubkey: &PublicKey, network_graph: &ReadOnlyNetworkGraph, outgoing_channel: &ChannelDetails,
-	incoming_channel: &ChannelDetails, fee_limit: u64, logger: L,
-	scorer: &S, random_seed_bytes: &[u8; 32]
+	our_node_pubkey: &PublicKey, network_graph: &ReadOnlyNetworkGraph,
+	outgoing_channel: &ChannelDetails, incoming_channel: &ChannelDetails, logger: L,
+	scorer: &S, random_seed_bytes: &[u8; 32], final_value_msat: u64
 ) -> Result<Route, LightningError>
 where L::Target: Logger {
 	if outgoing_channel.short_channel_id.is_none() || incoming_channel.short_channel_id.is_none() {
@@ -734,7 +734,7 @@ where L::Target: Logger {
 	}])];
 
 	get_route_internal(
-		our_node_pubkey, &payment_params, network_graph, Some(&first_hops[..]), 12,
+		our_node_pubkey, &payment_params, network_graph, Some(&first_hops[..]), final_value_msat,
 		final_cltv_expiry_delta, logger, scorer, random_seed_bytes,
 	)
 }
@@ -1911,7 +1911,7 @@ fn build_route_from_hops_internal<L: Deref>(
 #[cfg(test)]
 mod tests {
 	use routing::network_graph::{NetworkGraph, NetGraphMsgHandler, NodeId};
-	use routing::router::{get_rebalancing_route, get_route, build_route_from_hops_internal, add_random_cltv_offset, default_node_features,
+	use routing::router::{get_route, build_route_from_hops_internal, add_random_cltv_offset, default_node_features,
 		PaymentParameters, Route, RouteHint, RouteHintHop, RouteHop, RoutingFees,
 		DEFAULT_MAX_TOTAL_CLTV_EXPIRY_DELTA, MAX_PATH_LENGTH_ESTIMATE};
 	use routing::scoring::{ChannelUsage, Score};
