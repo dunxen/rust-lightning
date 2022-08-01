@@ -1523,9 +1523,28 @@ impl<L: Deref> NetworkGraph<L> where L::Target: Logger {
 	}
 
 	/// Marks a node in the graph as failed.
-	pub fn node_failed(&self, _node_id: &PublicKey, is_permanent: bool) {
+	pub fn node_failed(&self, node_id: &PublicKey, is_permanent: bool) {
 		if is_permanent {
-			// TODO: Wholly remove the node
+			let node_id = NodeId::from_pubkey(node_id); 
+			let mut nodes = self.nodes.write().unwrap();
+			let mut channels = self.channels.write().unwrap();
+
+			nodes.remove(&node_id);
+
+			// TODO: Use `BTreeMap::retain()` when MSRV >= 1.53.
+			let mut scids_to_remove = Vec::new();
+			for (scid, info) in channels.iter_mut() {
+				if info.node_one == node_id || info.node_two == node_id {
+					scids_to_remove.push(*scid);
+				}
+			}
+			if !scids_to_remove.is_empty() {
+				let mut nodes = self.nodes.write().unwrap();
+				for scid in scids_to_remove {
+					let info = channels.remove(&scid).expect("We just accessed this scid, it should be present");
+					Self::remove_channel_in_nodes(&mut nodes, &info, scid);
+				}
+			}
 		} else {
 			// TODO: downgrade the node
 		}
