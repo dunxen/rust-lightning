@@ -4774,6 +4774,9 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 			// overflow here.
 			next_remote_commitment_number: INITIAL_COMMITMENT_NUMBER - self.context.cur_counterparty_commitment_transaction_number - 1,
 			data_loss_protect,
+			// TODO: If we've sent `commtiment_signed` for an interactive transaction construction but have not received `tx_signatures`
+			// we MUST set `next_funding_txid` to the txid of that interactive transaction, else we MUST NOT set it.
+			next_funding_txid: None,
 		}
 	}
 
