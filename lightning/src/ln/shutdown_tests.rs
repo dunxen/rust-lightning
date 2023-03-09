@@ -11,6 +11,7 @@
 
 use crate::chain::keysinterface::{EntropySource, SignerProvider};
 use crate::chain::transaction::OutPoint;
+use crate::ln::channel::ChannelInterface;
 use crate::ln::channelmanager::{self, PaymentSendFailure, PaymentId};
 use crate::routing::router::{PaymentParameters, get_route};
 use crate::ln::msgs;

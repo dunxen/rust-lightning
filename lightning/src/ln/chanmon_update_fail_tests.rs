@@ -20,7 +20,7 @@ use crate::chain::channelmonitor::{ANTI_REORG_DELAY, ChannelMonitor};
 use crate::chain::transaction::OutPoint;
 use crate::chain::{ChannelMonitorUpdateStatus, Listen, Watch};
 use crate::ln::channelmanager::{ChannelManager, RAACommitmentOrder, PaymentSendFailure, PaymentId};
-use crate::ln::channel::AnnouncementSigsState;
+use crate::ln::channel::{AnnouncementSigsState, ChannelInterface};
 use crate::ln::msgs;
 use crate::ln::msgs::{ChannelMessageHandler, RoutingMessageHandler};
 use crate::util::enforcing_trait_impls::EnforcingSigner;

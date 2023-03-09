@@ -16,7 +16,7 @@ use crate::chain::channelmonitor::LATENCY_GRACE_PERIOD_BLOCKS;
 use crate::chain::channelmonitor::{ANTI_REORG_DELAY, Balance};
 use crate::chain::transaction::OutPoint;
 use crate::chain::chaininterface::LowerBoundedFeeEstimator;
-use crate::ln::channel;
+use crate::ln::channel::{self, ChannelInterface};
 #[cfg(anchors)]
 use crate::ln::chan_utils;
 #[cfg(anchors)]

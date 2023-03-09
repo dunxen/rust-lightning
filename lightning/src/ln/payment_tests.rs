@@ -15,7 +15,7 @@ use crate::chain::{ChannelMonitorUpdateStatus, Confirm, Listen, Watch};
 use crate::chain::channelmonitor::{ANTI_REORG_DELAY, LATENCY_GRACE_PERIOD_BLOCKS};
 use crate::chain::keysinterface::EntropySource;
 use crate::chain::transaction::OutPoint;
-use crate::ln::channel::EXPIRE_PREV_CONFIG_TICKS;
+use crate::ln::channel::{ChannelInterface, EXPIRE_PREV_CONFIG_TICKS};
 use crate::ln::channelmanager::{BREAKDOWN_TIMEOUT, ChannelManager, MPP_TIMEOUT_TICKS, MIN_CLTV_EXPIRY_DELTA, PaymentId, PaymentSendFailure, IDEMPOTENCY_TIMEOUT_TICKS, RecentPaymentDetails};
 use crate::ln::features::InvoiceFeatures;
 use crate::ln::msgs;

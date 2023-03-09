@@ -346,7 +346,7 @@ enum HTLCInitiator {
 }
 
 /// An enum gathering stats on pending HTLCs, either inbound or outbound side.
-struct HTLCStats {
+pub(crate) struct HTLCStats {
 	pending_htlcs: u32,
 	pending_htlcs_value_msat: u64,
 	on_counterparty_tx_dust_exposure_msat: u64,
@@ -356,7 +356,7 @@ struct HTLCStats {
 }
 
 /// An enum gathering stats on commitment transaction, either local or remote.
-struct CommitmentStats<'a> {
+pub(crate) struct CommitmentStats<'a> {
 	tx: CommitmentTransaction, // the transaction info
 	feerate_per_kw: u32, // the feerate included to build the transaction
 	total_fee_sat: u64, // the total fee included in the transaction
@@ -368,7 +368,7 @@ struct CommitmentStats<'a> {
 }
 
 /// Used when calculating whether we or the remote can afford an additional HTLC.
-struct HTLCCandidate {
+pub(crate) struct HTLCCandidate {
 	amount_msat: u64,
 	origin: HTLCInitiator,
 }
@@ -737,6 +737,988 @@ pub(super) struct ChannelContext<Signer: ChannelSigner> {
 	pending_monitor_updates: Vec<ChannelMonitorUpdate>,
 }
 
+/// The `ChannelInterface` contains all shared behaviour for channel-like objects, including
+/// all the public utilities needed by channels. Only methods that are common to all states of a
+/// channel can be found here.
+pub(super) trait ChannelInterface<'a, Signer: WriteableEcdsaChannelSigner + 'a> {
+	fn get_context(&'a self) -> &'a ChannelContext<Signer>;
+
+	fn get_context_mut(&'a mut self) -> &'a mut ChannelContext<Signer>;
+
+	fn channel_id(&'a self) -> [u8; 32] {
+		self.get_context().channel_id
+	}
+
+	fn minimum_depth(&'a self) -> Option<u32> {
+		self.get_context().minimum_depth
+	}
+
+	/// Gets the "user_id" value passed into the construction of this channel. It has no special
+	/// meaning and exists only to allow users to have a persistent identifier of a channel.
+	fn get_user_id(&'a self) -> u128 {
+		self.get_context().user_id
+	}
+
+	fn opt_anchors(&'a self) -> bool {
+		self.get_context().channel_transaction_parameters.opt_anchors.is_some()
+	}
+
+	/// Gets the channel's type
+	fn get_channel_type(&'a self) -> &ChannelTypeFeatures {
+		&self.get_context().channel_type
+	}
+
+	/// Guaranteed to be Some after both ChannelReady messages have been exchanged (and, thus,
+	/// is_usable() returns true).
+	/// Allowed in any state (including after shutdown)
+	fn get_short_channel_id(&'a self) -> Option<u64> {
+		self.get_context().short_channel_id
+	}
+
+	/// Allowed in any state (including after shutdown)
+	fn latest_inbound_scid_alias(&'a self) -> Option<u64> {
+		self.get_context().latest_inbound_scid_alias
+	}
+
+	/// Allowed in any state (including after shutdown)
+	fn outbound_scid_alias(&'a self) -> u64 {
+		self.get_context().outbound_scid_alias
+	}
+
+	/// Only allowed immediately after deserialization if get_outbound_scid_alias returns 0,
+	/// indicating we were written by LDK prior to 0.0.106 which did not set outbound SCID aliases.
+	fn set_outbound_scid_alias(&'a mut self, outbound_scid_alias: u64) {
+		let context = self.get_context_mut();
+		assert_eq!(context.outbound_scid_alias, 0);
+		context.outbound_scid_alias = outbound_scid_alias;
+	}
+
+	/// Returns the funding_txo we either got from our peer, or were given by
+	/// get_outbound_funding_created.
+	fn get_funding_txo(&'a self) -> Option<OutPoint> {
+		self.get_context().channel_transaction_parameters.funding_outpoint
+	}
+
+	/// Returns the block hash in which our funding transaction was confirmed.
+	fn get_funding_tx_confirmed_in(&'a self) -> Option<BlockHash> {
+		self.get_context().funding_tx_confirmed_in
+	}
+
+	/// Returns the current number of confirmations on the funding transaction.
+	fn get_funding_tx_confirmations(&'a self, height: u32) -> u32 {
+		if self.get_context().funding_tx_confirmation_height == 0 {
+			// We either haven't seen any confirmation yet, or observed a reorg.
+			return 0;
+		}
+
+		height.checked_sub(self.get_context().funding_tx_confirmation_height).map_or(0, |c| c + 1)
+	}
+
+	fn get_holder_selected_contest_delay(&'a self) -> u16 {
+		self.get_context().channel_transaction_parameters.holder_selected_contest_delay
+	}
+
+	fn get_holder_pubkeys(&'a self) -> &ChannelPublicKeys {
+		&self.get_context().channel_transaction_parameters.holder_pubkeys
+	}
+
+	fn get_counterparty_selected_contest_delay(&'a self) -> Option<u16> {
+		self.get_context().channel_transaction_parameters.counterparty_parameters
+			.as_ref().map(|params| params.selected_contest_delay)
+	}
+
+	fn get_counterparty_pubkeys(&'a self) -> &ChannelPublicKeys {
+		&self.get_context().channel_transaction_parameters.counterparty_parameters.as_ref().unwrap().pubkeys
+	}
+
+	/// Allowed in any state (including after shutdown)
+	fn get_counterparty_node_id(&'a self) -> PublicKey {
+		self.get_context().counterparty_node_id
+	}
+
+	/// Allowed in any state (including after shutdown)
+	fn get_holder_htlc_minimum_msat(&'a self) -> u64 {
+		self.get_context().holder_htlc_minimum_msat
+	}
+
+	/// Allowed in any state (including after shutdown), but will return none before TheirInitSent
+	fn get_holder_htlc_maximum_msat(&'a self) -> Option<u64> {
+		self.get_htlc_maximum_msat(self.get_context().holder_max_htlc_value_in_flight_msat)
+	}
+
+	/// Allowed in any state (including after shutdown)
+	fn get_announced_htlc_max_msat(&'a self) -> u64 {
+		return cmp::min(
+			// Upper bound by capacity. We make it a bit less than full capacity to prevent attempts
+			// to use full capacity. This is an effort to reduce routing failures, because in many cases
+			// channel might have been used to route very small values (either by honest users or as DoS).
+			self.get_context().channel_value_satoshis * 1000 * 9 / 10,
+
+			self.get_context().counterparty_max_htlc_value_in_flight_msat
+		);
+	}
+
+	/// Allowed in any state (including after shutdown)
+	fn get_counterparty_htlc_minimum_msat(&'a self) -> u64 {
+		self.get_context().counterparty_htlc_minimum_msat
+	}
+
+	/// Allowed in any state (including after shutdown), but will return none before TheirInitSent
+	fn get_counterparty_htlc_maximum_msat(&'a self) -> Option<u64> {
+		self.get_htlc_maximum_msat(self.get_context().counterparty_max_htlc_value_in_flight_msat)
+	}
+
+	fn get_htlc_maximum_msat(&'a self, party_max_htlc_value_in_flight_msat: u64) -> Option<u64> {
+		self.get_context().counterparty_selected_channel_reserve_satoshis.map(|counterparty_reserve| {
+			let holder_reserve = self.get_context().holder_selected_channel_reserve_satoshis;
+			cmp::min(
+				(self.get_context().channel_value_satoshis - counterparty_reserve - holder_reserve) * 1000,
+				party_max_htlc_value_in_flight_msat
+			)
+		})
+	}
+
+	fn get_value_satoshis(&'a self) -> u64 {
+		self.get_context().channel_value_satoshis
+	}
+
+	fn get_fee_proportional_millionths(&'a self) -> u32 {
+		self.get_context().config.options.forwarding_fee_proportional_millionths
+	}
+
+	fn get_cltv_expiry_delta(&'a self) -> u16 {
+		cmp::max(self.get_context().config.options.cltv_expiry_delta, MIN_CLTV_EXPIRY_DELTA)
+	}
+
+	fn get_max_dust_htlc_exposure_msat(&'a self) -> u64 {
+		self.get_context().config.options.max_dust_htlc_exposure_msat
+	}
+
+	/// Returns the previous [`ChannelConfig`] applied to this channel, if any.
+	fn prev_config(&'a self) -> Option<ChannelConfig> {
+		self.get_context().prev_config.map(|prev_config| prev_config.0)
+	}
+
+	// Checks whether we should emit a `ChannelReady` event.
+	fn should_emit_channel_ready_event(&'a mut self) -> bool {
+		self.is_usable() && !self.get_context().channel_ready_event_emitted
+	}
+
+	// Remembers that we already emitted a `ChannelReady` event.
+	fn set_channel_ready_event_emitted(&'a mut self) {
+		self.get_context_mut().channel_ready_event_emitted = true;
+	}
+
+	/// Tracks the number of ticks elapsed since the previous [`ChannelConfig`] was updated. Once
+	/// [`EXPIRE_PREV_CONFIG_TICKS`] is reached, the previous config is considered expired and will
+	/// no longer be considered when forwarding HTLCs.
+	fn maybe_expire_prev_config(&'a mut self) {
+		let context = self.get_context_mut();
+		if context.prev_config.is_none() {
+			return;
+		}
+		let prev_config = context.prev_config.as_mut().unwrap();
+		prev_config.1 += 1;
+		if prev_config.1 == EXPIRE_PREV_CONFIG_TICKS {
+			context.prev_config = None;
+		}
+	}
+
+	/// Returns the current [`ChannelConfig`] applied to the channel.
+	fn config(&'a self) -> ChannelConfig {
+		self.get_context().config.options
+	}
+
+	/// Updates the channel's config. A bool is returned indicating whether the config update
+	/// applied resulted in a new ChannelUpdate message.
+	fn update_config(&'a mut self, config: &ChannelConfig) -> bool {
+		let context = self.get_context_mut();
+		let did_channel_update =
+			context.config.options.forwarding_fee_proportional_millionths != config.forwarding_fee_proportional_millionths ||
+			context.config.options.forwarding_fee_base_msat != config.forwarding_fee_base_msat ||
+			context.config.options.cltv_expiry_delta != config.cltv_expiry_delta;
+		if did_channel_update {
+			context.prev_config = Some((context.config.options, 0));
+			// Update the counter, which backs the ChannelUpdate timestamp, to allow the relay
+			// policy change to propagate throughout the network.
+			context.update_time_counter += 1;
+		}
+		context.config.options = *config;
+		did_channel_update
+	}
+
+	/// Returns true if this channel is fully established and not known to be closing.
+	/// Allowed in any state (including after shutdown)
+	fn is_usable(&'a self) -> bool {
+		let context = self.get_context();
+		let mask = ChannelState::ChannelReady as u32 | BOTH_SIDES_SHUTDOWN_MASK;
+		(context.channel_state & mask) == (ChannelState::ChannelReady as u32) && !context.monitor_pending_channel_ready
+	}
+
+	/// Allowed in any state (including after shutdown)
+	fn get_update_time_counter(&'a self) -> u32 {
+		self.get_context().update_time_counter
+	}
+
+	fn get_latest_monitor_update_id(&'a self) -> u64 {
+		self.get_context().latest_monitor_update_id
+	}
+
+	fn should_announce(&'a self) -> bool {
+		self.get_context().config.announced_channel
+	}
+
+	fn is_outbound(&'a self) -> bool {
+		self.get_context().channel_transaction_parameters.is_outbound_from_holder
+	}
+
+	fn counterparty_funding_pubkey(&'a self) -> &PublicKey {
+		&self.get_counterparty_pubkeys().funding_pubkey
+	}
+
+	/// Gets the redeemscript for the funding transaction output (ie the funding transaction output
+	/// pays to get_funding_redeemscript().to_v0_p2wsh()).
+	/// Panics if called before accept_channel/new_from_req
+	fn get_funding_redeemscript(&'a self) -> Script {
+		make_funding_redeemscript(&self.get_holder_pubkeys().funding_pubkey, self.counterparty_funding_pubkey())
+	}
+
+	#[inline]
+	/// Creates a set of keys for build_commitment_transaction to generate a transaction which our
+	/// counterparty will sign (ie DO NOT send signatures over a transaction created by this to
+	/// our counterparty!)
+	/// The result is a transaction which we can revoke broadcastership of (ie a "local" transaction)
+	/// TODO Some magic rust shit to compile-time check this?
+	fn build_holder_transaction_keys(&'a self, commitment_number: u64) -> TxCreationKeys {
+		let context = self.get_context();
+		let per_commitment_point = context.holder_signer.get_per_commitment_point(commitment_number, &context.secp_ctx);
+		let delayed_payment_base = &self.get_holder_pubkeys().delayed_payment_basepoint;
+		let htlc_basepoint = &self.get_holder_pubkeys().htlc_basepoint;
+		let counterparty_pubkeys = self.get_counterparty_pubkeys();
+
+		TxCreationKeys::derive_new(&context.secp_ctx, &per_commitment_point, delayed_payment_base, htlc_basepoint, &counterparty_pubkeys.revocation_basepoint, &counterparty_pubkeys.htlc_basepoint)
+	}
+
+	#[inline]
+	/// Creates a set of keys for build_commitment_transaction to generate a transaction which we
+	/// will sign and send to our counterparty.
+	/// If an Err is returned, it is a ChannelError::Close (for get_outbound_funding_created)
+	fn build_remote_transaction_keys(&'a self) -> TxCreationKeys {
+		//TODO: Ensure that the payment_key derived here ends up in the library users' wallet as we
+		//may see payments to it!
+		let revocation_basepoint = &self.get_holder_pubkeys().revocation_basepoint;
+		let htlc_basepoint = &self.get_holder_pubkeys().htlc_basepoint;
+		let counterparty_pubkeys = self.get_counterparty_pubkeys();
+
+		let context = self.get_context();
+		TxCreationKeys::derive_new(&context.secp_ctx, &context.counterparty_cur_commitment_point.unwrap(), &counterparty_pubkeys.delayed_payment_basepoint, &counterparty_pubkeys.htlc_basepoint, revocation_basepoint, htlc_basepoint)
+	}
+
+	/// Transaction nomenclature is somewhat confusing here as there are many different cases - a
+	/// transaction is referred to as "a's transaction" implying that a will be able to broadcast
+	/// the transaction. Thus, b will generally be sending a signature over such a transaction to
+	/// a, and a can revoke the transaction by providing b the relevant per_commitment_secret. As
+	/// such, a transaction is generally the result of b increasing the amount paid to a (or adding
+	/// an HTLC to a).
+	/// @local is used only to convert relevant internal structures which refer to remote vs local
+	/// to decide value of outputs and direction of HTLCs.
+	/// @generated_by_local is used to determine *which* HTLCs to include - noting that the HTLC
+	/// state may indicate that one peer has informed the other that they'd like to add an HTLC but
+	/// have not yet committed it. Such HTLCs will only be included in transactions which are being
+	/// generated by the peer which proposed adding the HTLCs, and thus we need to understand both
+	/// which peer generated this transaction and "to whom" this transaction flows.
+	#[inline]
+	fn build_commitment_transaction<L: Deref>(&'a self, commitment_number: u64, keys: &TxCreationKeys, local: bool, generated_by_local: bool, logger: &L) -> CommitmentStats
+		where L::Target: Logger
+	{
+		let context = self.get_context();
+		let mut included_dust_htlcs: Vec<(HTLCOutputInCommitment, Option<&HTLCSource>)> = Vec::new();
+		let num_htlcs = context.pending_inbound_htlcs.len() + context.pending_outbound_htlcs.len();
+		let mut included_non_dust_htlcs: Vec<(HTLCOutputInCommitment, Option<&HTLCSource>)> = Vec::with_capacity(num_htlcs);
+
+		let broadcaster_dust_limit_satoshis = if local { context.holder_dust_limit_satoshis } else { context.counterparty_dust_limit_satoshis };
+		let mut remote_htlc_total_msat = 0;
+		let mut local_htlc_total_msat = 0;
+		let mut value_to_self_msat_offset = 0;
+
+		let mut feerate_per_kw = context.feerate_per_kw;
+		if let Some((feerate, update_state)) = context.pending_update_fee {
+			if match update_state {
+				// Note that these match the inclusion criteria when scanning
+				// pending_inbound_htlcs below.
+				FeeUpdateState::RemoteAnnounced => { debug_assert!(!self.is_outbound()); !generated_by_local },
+				FeeUpdateState::AwaitingRemoteRevokeToAnnounce => { debug_assert!(!self.is_outbound()); !generated_by_local },
+				FeeUpdateState::Outbound => { assert!(self.is_outbound());  generated_by_local },
+			} {
+				feerate_per_kw = feerate;
+			}
+		}
+
+		log_trace!(logger, "Building commitment transaction number {} (really {} xor {}) for channel {} for {}, generated by {} with fee {}...",
+			commitment_number, (INITIAL_COMMITMENT_NUMBER - commitment_number),
+			get_commitment_transaction_number_obscure_factor(&self.get_holder_pubkeys().payment_point, &self.get_counterparty_pubkeys().payment_point, self.is_outbound()),
+			log_bytes!(context.channel_id), if local { "us" } else { "remote" }, if generated_by_local { "us" } else { "remote" }, feerate_per_kw);
+
+		macro_rules! get_htlc_in_commitment {
+			($htlc: expr, $offered: expr) => {
+				HTLCOutputInCommitment {
+					offered: $offered,
+					amount_msat: $htlc.amount_msat,
+					cltv_expiry: $htlc.cltv_expiry,
+					payment_hash: $htlc.payment_hash,
+					transaction_output_index: None
+				}
+			}
+		}
+
+		macro_rules! add_htlc_output {
+			($htlc: expr, $outbound: expr, $source: expr, $state_name: expr) => {
+				if $outbound == local { // "offered HTLC output"
+					let htlc_in_tx = get_htlc_in_commitment!($htlc, true);
+					let htlc_tx_fee = if self.opt_anchors() {
+						0
+					} else {
+						feerate_per_kw as u64 * htlc_timeout_tx_weight(false) / 1000
+					};
+					if $htlc.amount_msat / 1000 >= broadcaster_dust_limit_satoshis + htlc_tx_fee {
+						log_trace!(logger, "   ...including {} {} HTLC {} (hash {}) with value {}", if $outbound { "outbound" } else { "inbound" }, $state_name, $htlc.htlc_id, log_bytes!($htlc.payment_hash.0), $htlc.amount_msat);
+						included_non_dust_htlcs.push((htlc_in_tx, $source));
+					} else {
+						log_trace!(logger, "   ...including {} {} dust HTLC {} (hash {}) with value {} due to dust limit", if $outbound { "outbound" } else { "inbound" }, $state_name, $htlc.htlc_id, log_bytes!($htlc.payment_hash.0), $htlc.amount_msat);
+						included_dust_htlcs.push((htlc_in_tx, $source));
+					}
+				} else {
+					let htlc_in_tx = get_htlc_in_commitment!($htlc, false);
+					let htlc_tx_fee = if self.opt_anchors() {
+						0
+					} else {
+						feerate_per_kw as u64 * htlc_success_tx_weight(false) / 1000
+					};
+					if $htlc.amount_msat / 1000 >= broadcaster_dust_limit_satoshis + htlc_tx_fee {
+						log_trace!(logger, "   ...including {} {} HTLC {} (hash {}) with value {}", if $outbound { "outbound" } else { "inbound" }, $state_name, $htlc.htlc_id, log_bytes!($htlc.payment_hash.0), $htlc.amount_msat);
+						included_non_dust_htlcs.push((htlc_in_tx, $source));
+					} else {
+						log_trace!(logger, "   ...including {} {} dust HTLC {} (hash {}) with value {}", if $outbound { "outbound" } else { "inbound" }, $state_name, $htlc.htlc_id, log_bytes!($htlc.payment_hash.0), $htlc.amount_msat);
+						included_dust_htlcs.push((htlc_in_tx, $source));
+					}
+				}
+			}
+		}
+
+		for ref htlc in context.pending_inbound_htlcs.iter() {
+			let (include, state_name) = match htlc.state {
+				InboundHTLCState::RemoteAnnounced(_) => (!generated_by_local, "RemoteAnnounced"),
+				InboundHTLCState::AwaitingRemoteRevokeToAnnounce(_) => (!generated_by_local, "AwaitingRemoteRevokeToAnnounce"),
+				InboundHTLCState::AwaitingAnnouncedRemoteRevoke(_) => (true, "AwaitingAnnouncedRemoteRevoke"),
+				InboundHTLCState::Committed => (true, "Committed"),
+				InboundHTLCState::LocalRemoved(_) => (!generated_by_local, "LocalRemoved"),
+			};
+
+			if include {
+				add_htlc_output!(htlc, false, None, state_name);
+				remote_htlc_total_msat += htlc.amount_msat;
+			} else {
+				log_trace!(logger, "   ...not including inbound HTLC {} (hash {}) with value {} due to state ({})", htlc.htlc_id, log_bytes!(htlc.payment_hash.0), htlc.amount_msat, state_name);
+				match &htlc.state {
+					&InboundHTLCState::LocalRemoved(ref reason) => {
+						if generated_by_local {
+							if let &InboundHTLCRemovalReason::Fulfill(_) = reason {
+								value_to_self_msat_offset += htlc.amount_msat as i64;
+							}
+						}
+					},
+					_ => {},
+				}
+			}
+		}
+
+		let mut preimages: Vec<PaymentPreimage> = Vec::new();
+
+		for ref htlc in context.pending_outbound_htlcs.iter() {
+			let (include, state_name) = match htlc.state {
+				OutboundHTLCState::LocalAnnounced(_) => (generated_by_local, "LocalAnnounced"),
+				OutboundHTLCState::Committed => (true, "Committed"),
+				OutboundHTLCState::RemoteRemoved(_) => (generated_by_local, "RemoteRemoved"),
+				OutboundHTLCState::AwaitingRemoteRevokeToRemove(_) => (generated_by_local, "AwaitingRemoteRevokeToRemove"),
+				OutboundHTLCState::AwaitingRemovedRemoteRevoke(_) => (false, "AwaitingRemovedRemoteRevoke"),
+			};
+
+			let preimage_opt = match htlc.state {
+				OutboundHTLCState::RemoteRemoved(OutboundHTLCOutcome::Success(p)) => p,
+				OutboundHTLCState::AwaitingRemoteRevokeToRemove(OutboundHTLCOutcome::Success(p)) => p,
+				OutboundHTLCState::AwaitingRemovedRemoteRevoke(OutboundHTLCOutcome::Success(p)) => p,
+				_ => None,
+			};
+
+			if let Some(preimage) = preimage_opt {
+				preimages.push(preimage);
+			}
+
+			if include {
+				add_htlc_output!(htlc, true, Some(&htlc.source), state_name);
+				local_htlc_total_msat += htlc.amount_msat;
+			} else {
+				log_trace!(logger, "   ...not including outbound HTLC {} (hash {}) with value {} due to state ({})", htlc.htlc_id, log_bytes!(htlc.payment_hash.0), htlc.amount_msat, state_name);
+				match htlc.state {
+					OutboundHTLCState::AwaitingRemoteRevokeToRemove(OutboundHTLCOutcome::Success(_))|OutboundHTLCState::AwaitingRemovedRemoteRevoke(OutboundHTLCOutcome::Success(_)) => {
+						value_to_self_msat_offset -= htlc.amount_msat as i64;
+					},
+					OutboundHTLCState::RemoteRemoved(OutboundHTLCOutcome::Success(_)) => {
+						if !generated_by_local {
+							value_to_self_msat_offset -= htlc.amount_msat as i64;
+						}
+					},
+					_ => {},
+				}
+			}
+		}
+
+		let mut value_to_self_msat: i64 = (context.value_to_self_msat - local_htlc_total_msat) as i64 + value_to_self_msat_offset;
+		assert!(value_to_self_msat >= 0);
+		// Note that in case they have several just-awaiting-last-RAA fulfills in-progress (ie
+		// AwaitingRemoteRevokeToRemove or AwaitingRemovedRemoteRevoke) we may have allowed them to
+		// "violate" their reserve value by couting those against it. Thus, we have to convert
+		// everything to i64 before subtracting as otherwise we can overflow.
+		let mut value_to_remote_msat: i64 = (context.channel_value_satoshis * 1000) as i64 - (context.value_to_self_msat as i64) - (remote_htlc_total_msat as i64) - value_to_self_msat_offset;
+		assert!(value_to_remote_msat >= 0);
+
+		#[cfg(debug_assertions)]
+		{
+			// Make sure that the to_self/to_remote is always either past the appropriate
+			// channel_reserve *or* it is making progress towards it.
+			let mut broadcaster_max_commitment_tx_output = if generated_by_local {
+				context.holder_max_commitment_tx_output.lock().unwrap()
+			} else {
+				context.counterparty_max_commitment_tx_output.lock().unwrap()
+			};
+			debug_assert!(broadcaster_max_commitment_tx_output.0 <= value_to_self_msat as u64 || value_to_self_msat / 1000 >= context.counterparty_selected_channel_reserve_satoshis.unwrap() as i64);
+			broadcaster_max_commitment_tx_output.0 = cmp::max(broadcaster_max_commitment_tx_output.0, value_to_self_msat as u64);
+			debug_assert!(broadcaster_max_commitment_tx_output.1 <= value_to_remote_msat as u64 || value_to_remote_msat / 1000 >= context.holder_selected_channel_reserve_satoshis as i64);
+			broadcaster_max_commitment_tx_output.1 = cmp::max(broadcaster_max_commitment_tx_output.1, value_to_remote_msat as u64);
+		}
+
+		let total_fee_sat = Channel::<Signer>::commit_tx_fee_sat(feerate_per_kw, included_non_dust_htlcs.len(), context.channel_transaction_parameters.opt_anchors.is_some());
+		let anchors_val = if context.channel_transaction_parameters.opt_anchors.is_some() { ANCHOR_OUTPUT_VALUE_SATOSHI * 2 } else { 0 } as i64;
+		let (value_to_self, value_to_remote) = if self.is_outbound() {
+			(value_to_self_msat / 1000 - anchors_val - total_fee_sat as i64, value_to_remote_msat / 1000)
+		} else {
+			(value_to_self_msat / 1000, value_to_remote_msat / 1000 - anchors_val - total_fee_sat as i64)
+		};
+
+		let mut value_to_a = if local { value_to_self } else { value_to_remote };
+		let mut value_to_b = if local { value_to_remote } else { value_to_self };
+		let (funding_pubkey_a, funding_pubkey_b) = if local {
+			(self.get_holder_pubkeys().funding_pubkey, self.get_counterparty_pubkeys().funding_pubkey)
+		} else {
+			(self.get_counterparty_pubkeys().funding_pubkey, self.get_holder_pubkeys().funding_pubkey)
+		};
+
+		if value_to_a >= (broadcaster_dust_limit_satoshis as i64) {
+			log_trace!(logger, "   ...including {} output with value {}", if local { "to_local" } else { "to_remote" }, value_to_a);
+		} else {
+			value_to_a = 0;
+		}
+
+		if value_to_b >= (broadcaster_dust_limit_satoshis as i64) {
+			log_trace!(logger, "   ...including {} output with value {}", if local { "to_remote" } else { "to_local" }, value_to_b);
+		} else {
+			value_to_b = 0;
+		}
+
+		let num_nondust_htlcs = included_non_dust_htlcs.len();
+
+		let channel_parameters =
+			if local { context.channel_transaction_parameters.as_holder_broadcastable() }
+			else { context.channel_transaction_parameters.as_counterparty_broadcastable() };
+		let tx = CommitmentTransaction::new_with_auxiliary_htlc_data(commitment_number,
+		                                                             value_to_a as u64,
+		                                                             value_to_b as u64,
+		                                                             context.channel_transaction_parameters.opt_anchors.is_some(),
+		                                                             funding_pubkey_a,
+		                                                             funding_pubkey_b,
+		                                                             keys.clone(),
+		                                                             feerate_per_kw,
+		                                                             &mut included_non_dust_htlcs,
+		                                                             &channel_parameters
+		);
+		let mut htlcs_included = included_non_dust_htlcs;
+		// The unwrap is safe, because all non-dust HTLCs have been assigned an output index
+		htlcs_included.sort_unstable_by_key(|h| h.0.transaction_output_index.unwrap());
+		htlcs_included.append(&mut included_dust_htlcs);
+
+		// For the stats, trimmed-to-0 the value in msats accordingly
+		value_to_self_msat = if (value_to_self_msat * 1000) < broadcaster_dust_limit_satoshis as i64 { 0 } else { value_to_self_msat };
+		value_to_remote_msat = if (value_to_remote_msat * 1000) < broadcaster_dust_limit_satoshis as i64 { 0 } else { value_to_remote_msat };
+
+		CommitmentStats {
+			tx,
+			feerate_per_kw,
+			total_fee_sat,
+			num_nondust_htlcs,
+			htlcs_included,
+			local_balance_msat: value_to_self_msat as u64,
+			remote_balance_msat: value_to_remote_msat as u64,
+			preimages
+		}
+	}
+
+	/// Get forwarding information for the counterparty.
+	fn counterparty_forwarding_info(&'a self) -> Option<CounterpartyForwardingInfo> {
+		self.get_context().counterparty_forwarding_info.clone()
+	}
+
+	/// Get the available balances, see [`AvailableBalances`]'s fields for more info.
+	/// Doesn't bother handling the
+	/// if-we-removed-it-already-but-haven't-fully-resolved-they-can-still-send-an-inbound-HTLC
+	/// corner case properly.
+	fn get_available_balances(&'a self) -> AvailableBalances {
+		// Note that we have to handle overflow due to the above case.
+		let outbound_stats = self.get_outbound_pending_htlc_stats(None);
+
+		let context = self.get_context();
+		let mut balance_msat = context.value_to_self_msat;
+		for ref htlc in context.pending_inbound_htlcs.iter() {
+			if let InboundHTLCState::LocalRemoved(InboundHTLCRemovalReason::Fulfill(_)) = htlc.state {
+				balance_msat += htlc.amount_msat;
+			}
+		}
+		balance_msat -= outbound_stats.pending_htlcs_value_msat;
+
+		let outbound_capacity_msat = cmp::max(context.value_to_self_msat as i64
+				- outbound_stats.pending_htlcs_value_msat as i64
+				- context.counterparty_selected_channel_reserve_satoshis.unwrap_or(0) as i64 * 1000,
+			0) as u64;
+		AvailableBalances {
+			inbound_capacity_msat: cmp::max(context.channel_value_satoshis as i64 * 1000
+					- context.value_to_self_msat as i64
+					- self.get_inbound_pending_htlc_stats(None).pending_htlcs_value_msat as i64
+					- context.holder_selected_channel_reserve_satoshis as i64 * 1000,
+				0) as u64,
+			outbound_capacity_msat,
+			next_outbound_htlc_limit_msat: cmp::max(cmp::min(outbound_capacity_msat as i64,
+					context.counterparty_max_htlc_value_in_flight_msat as i64
+						- outbound_stats.pending_htlcs_value_msat as i64),
+				0) as u64,
+			balance_msat,
+		}
+	}
+
+	/// Returns a HTLCStats about inbound pending htlcs
+	fn get_inbound_pending_htlc_stats(&'a self, outbound_feerate_update: Option<u32>) -> HTLCStats {
+		let context = self.get_context();
+		let mut stats = HTLCStats {
+			pending_htlcs: context.pending_inbound_htlcs.len() as u32,
+			pending_htlcs_value_msat: 0,
+			on_counterparty_tx_dust_exposure_msat: 0,
+			on_holder_tx_dust_exposure_msat: 0,
+			holding_cell_msat: 0,
+			on_holder_tx_holding_cell_htlcs_count: 0,
+		};
+
+		let (htlc_timeout_dust_limit, htlc_success_dust_limit) = if self.opt_anchors() {
+			(0, 0)
+		} else {
+			let dust_buffer_feerate = self.get_dust_buffer_feerate(outbound_feerate_update) as u64;
+			(dust_buffer_feerate * htlc_timeout_tx_weight(false) / 1000,
+				dust_buffer_feerate * htlc_success_tx_weight(false) / 1000)
+		};
+		let counterparty_dust_limit_timeout_sat = htlc_timeout_dust_limit + context.counterparty_dust_limit_satoshis;
+		let holder_dust_limit_success_sat = htlc_success_dust_limit + context.holder_dust_limit_satoshis;
+		for ref htlc in context.pending_inbound_htlcs.iter() {
+			stats.pending_htlcs_value_msat += htlc.amount_msat;
+			if htlc.amount_msat / 1000 < counterparty_dust_limit_timeout_sat {
+				stats.on_counterparty_tx_dust_exposure_msat += htlc.amount_msat;
+			}
+			if htlc.amount_msat / 1000 < holder_dust_limit_success_sat {
+				stats.on_holder_tx_dust_exposure_msat += htlc.amount_msat;
+			}
+		}
+		stats
+	}
+
+	/// Returns a HTLCStats about pending outbound htlcs, *including* pending adds in our holding cell.
+	fn get_outbound_pending_htlc_stats(&'a self, outbound_feerate_update: Option<u32>) -> HTLCStats {
+		let context = self.get_context();
+		let mut stats = HTLCStats {
+			pending_htlcs: context.pending_outbound_htlcs.len() as u32,
+			pending_htlcs_value_msat: 0,
+			on_counterparty_tx_dust_exposure_msat: 0,
+			on_holder_tx_dust_exposure_msat: 0,
+			holding_cell_msat: 0,
+			on_holder_tx_holding_cell_htlcs_count: 0,
+		};
+
+		let (htlc_timeout_dust_limit, htlc_success_dust_limit) = if self.opt_anchors() {
+			(0, 0)
+		} else {
+			let dust_buffer_feerate = self.get_dust_buffer_feerate(outbound_feerate_update) as u64;
+			(dust_buffer_feerate * htlc_timeout_tx_weight(false) / 1000,
+				dust_buffer_feerate * htlc_success_tx_weight(false) / 1000)
+		};
+		let counterparty_dust_limit_success_sat = htlc_success_dust_limit + context.counterparty_dust_limit_satoshis;
+		let holder_dust_limit_timeout_sat = htlc_timeout_dust_limit + context.holder_dust_limit_satoshis;
+		for ref htlc in context.pending_outbound_htlcs.iter() {
+			stats.pending_htlcs_value_msat += htlc.amount_msat;
+			if htlc.amount_msat / 1000 < counterparty_dust_limit_success_sat {
+				stats.on_counterparty_tx_dust_exposure_msat += htlc.amount_msat;
+			}
+			if htlc.amount_msat / 1000 < holder_dust_limit_timeout_sat {
+				stats.on_holder_tx_dust_exposure_msat += htlc.amount_msat;
+			}
+		}
+
+		for update in context.holding_cell_htlc_updates.iter() {
+			if let &HTLCUpdateAwaitingACK::AddHTLC { ref amount_msat, .. } = update {
+				stats.pending_htlcs += 1;
+				stats.pending_htlcs_value_msat += amount_msat;
+				stats.holding_cell_msat += amount_msat;
+				if *amount_msat / 1000 < counterparty_dust_limit_success_sat {
+					stats.on_counterparty_tx_dust_exposure_msat += amount_msat;
+				}
+				if *amount_msat / 1000 < holder_dust_limit_timeout_sat {
+					stats.on_holder_tx_dust_exposure_msat += amount_msat;
+				} else {
+					stats.on_holder_tx_holding_cell_htlcs_count += 1;
+				}
+			}
+		}
+		stats
+	}
+
+	fn get_holder_counterparty_selected_channel_reserve_satoshis(&'a self) -> (u64, Option<u64>) {
+		(self.get_context().holder_selected_channel_reserve_satoshis, self.get_context().counterparty_selected_channel_reserve_satoshis)
+	}
+
+	/// Returns true if we've ever received a message from the remote end for this Channel
+	fn have_received_message(&'a self) -> bool {
+		self.get_context().channel_state > (ChannelState::OurInitSent as u32)
+	}
+
+	/// Gets the latest commitment transaction and any dependent transactions for relay (forcing
+	/// shutdown of this channel - no more calls into this Channel may be made afterwards except
+	/// those explicitly stated to be allowed after shutdown completes, eg some simple getters).
+	/// Also returns the list of payment_hashes for channels which we can safely fail backwards
+	/// immediately (others we will have to allow to time out).
+	fn force_shutdown(&'a mut self, should_broadcast: bool) -> (Option<(OutPoint, ChannelMonitorUpdate)>, Vec<(HTLCSource, PaymentHash, PublicKey, [u8; 32])>) {
+		let context = self.get_context_mut();
+		// Note that we MUST only generate a monitor update that indicates force-closure - we're
+		// called during initialization prior to the chain_monitor in the encompassing ChannelManager
+		// being fully configured in some cases. Thus, its likely any monitor events we generate will
+		// be delayed in being processed! See the docs for `ChannelManagerReadArgs` for more.
+		assert!(context.channel_state != ChannelState::ShutdownComplete as u32);
+
+		// We go ahead and "free" any holding cell HTLCs or HTLCs we haven't yet committed to and
+		// return them to fail the payment.
+		let mut dropped_outbound_htlcs = Vec::with_capacity(context.holding_cell_htlc_updates.len());
+		let counterparty_node_id = context.counterparty_node_id;
+		for htlc_update in context.holding_cell_htlc_updates.drain(..) {
+			match htlc_update {
+				HTLCUpdateAwaitingACK::AddHTLC { source, payment_hash, .. } => {
+					dropped_outbound_htlcs.push((source, payment_hash, counterparty_node_id, context.channel_id));
+				},
+				_ => {}
+			}
+		}
+		let monitor_update = if let Some(funding_txo) = context.channel_transaction_parameters.funding_outpoint {
+			// If we haven't yet exchanged funding signatures (ie channel_state < FundingSent),
+			// returning a channel monitor update here would imply a channel monitor update before
+			// we even registered the channel monitor to begin with, which is invalid.
+			// Thus, if we aren't actually at a point where we could conceivably broadcast the
+			// funding transaction, don't return a funding txo (which prevents providing the
+			// monitor update to the user, even if we return one).
+			// See test_duplicate_chan_id and test_pre_lockin_no_chan_closed_update for more.
+			if context.channel_state & (ChannelState::FundingSent as u32 | ChannelState::ChannelReady as u32 | ChannelState::ShutdownComplete as u32) != 0 {
+				context.latest_monitor_update_id += 1;
+				Some((funding_txo, ChannelMonitorUpdate {
+					update_id: context.latest_monitor_update_id,
+					updates: vec![ChannelMonitorUpdateStep::ChannelForceClosed { should_broadcast }],
+				}))
+			} else { None }
+		} else { None };
+
+		context.channel_state = ChannelState::ShutdownComplete as u32;
+		context.update_time_counter += 1;
+		(monitor_update, dropped_outbound_htlcs)
+	}
+
+	fn get_dust_buffer_feerate(&'a self, outbound_feerate_update: Option<u32>) -> u32 {
+		let context = self.get_context();
+		// When calculating our exposure to dust HTLCs, we assume that the channel feerate
+		// may, at any point, increase by at least 10 sat/vB (i.e 2530 sat/kWU) or 25%,
+		// whichever is higher. This ensures that we aren't suddenly exposed to significantly
+		// more dust balance if the feerate increases when we have several HTLCs pending
+		// which are near the dust limit.
+		let mut feerate_per_kw = context.feerate_per_kw;
+		// If there's a pending update fee, use it to ensure we aren't under-estimating
+		// potential feerate updates coming soon.
+		if let Some((feerate, _)) = context.pending_update_fee {
+			feerate_per_kw = cmp::max(feerate_per_kw, feerate);
+		}
+		if let Some(feerate) = outbound_feerate_update {
+			feerate_per_kw = cmp::max(feerate_per_kw, feerate);
+		}
+		cmp::max(2530, feerate_per_kw * 1250 / 1000)
+	}
+
+	/// Returns true if funding_created was sent/received.
+	fn is_funding_initiated(&'a self) -> bool {
+		self.get_context().channel_state >= ChannelState::FundingSent as u32
+	}
+
+	fn get_feerate_sat_per_1000_weight(&'a self) -> u32 {
+		self.get_context().feerate_per_kw
+	}
+
+	// Get the commitment tx fee for the local's (i.e. our) next commitment transaction based on the
+	// number of pending HTLCs that are on track to be in our next commitment tx, plus an additional
+	// HTLC if `fee_spike_buffer_htlc` is Some, plus a new HTLC given by `new_htlc_amount`. Dust HTLCs
+	// are excluded.
+	fn next_local_commit_tx_fee_msat(&'a self, htlc: HTLCCandidate, fee_spike_buffer_htlc: Option<()>) -> u64 {
+		assert!(self.is_outbound());
+
+		let context = self.get_context();
+
+		let (htlc_success_dust_limit, htlc_timeout_dust_limit) = if self.opt_anchors() {
+			(0, 0)
+		} else {
+			(context.feerate_per_kw as u64 * htlc_success_tx_weight(false) / 1000,
+				context.feerate_per_kw as u64 * htlc_timeout_tx_weight(false) / 1000)
+		};
+		let real_dust_limit_success_sat = htlc_success_dust_limit + context.holder_dust_limit_satoshis;
+		let real_dust_limit_timeout_sat = htlc_timeout_dust_limit + context.holder_dust_limit_satoshis;
+
+		let mut addl_htlcs = 0;
+		if fee_spike_buffer_htlc.is_some() { addl_htlcs += 1; }
+		match htlc.origin {
+			HTLCInitiator::LocalOffered => {
+				if htlc.amount_msat / 1000 >= real_dust_limit_timeout_sat {
+					addl_htlcs += 1;
+				}
+			},
+			HTLCInitiator::RemoteOffered => {
+				if htlc.amount_msat / 1000 >= real_dust_limit_success_sat {
+					addl_htlcs += 1;
+				}
+			}
+		}
+
+		let mut included_htlcs = 0;
+		for ref htlc in context.pending_inbound_htlcs.iter() {
+			if htlc.amount_msat / 1000 < real_dust_limit_success_sat {
+				continue
+			}
+			// We include LocalRemoved HTLCs here because we may still need to broadcast a commitment
+			// transaction including this HTLC if it times out before they RAA.
+			included_htlcs += 1;
+		}
+
+		for ref htlc in context.pending_outbound_htlcs.iter() {
+			if htlc.amount_msat / 1000 < real_dust_limit_timeout_sat {
+				continue
+			}
+			match htlc.state {
+				OutboundHTLCState::LocalAnnounced {..} => included_htlcs += 1,
+				OutboundHTLCState::Committed => included_htlcs += 1,
+				OutboundHTLCState::RemoteRemoved {..} => included_htlcs += 1,
+				// We don't include AwaitingRemoteRevokeToRemove HTLCs because our next commitment
+				// transaction won't be generated until they send us their next RAA, which will mean
+				// dropping any HTLCs in this state.
+				_ => {},
+			}
+		}
+
+		for htlc in context.holding_cell_htlc_updates.iter() {
+			match htlc {
+				&HTLCUpdateAwaitingACK::AddHTLC { amount_msat, .. } => {
+					if amount_msat / 1000 < real_dust_limit_timeout_sat {
+						continue
+					}
+					included_htlcs += 1
+				},
+				_ => {}, // Don't include claims/fails that are awaiting ack, because once we get the
+				         // ack we're guaranteed to never include them in commitment txs anymore.
+			}
+		}
+
+		let num_htlcs = included_htlcs + addl_htlcs;
+		let res = Self::commit_tx_fee_msat(context.feerate_per_kw, num_htlcs, self.opt_anchors());
+		#[cfg(any(test, fuzzing))]
+		{
+			let mut fee = res;
+			if fee_spike_buffer_htlc.is_some() {
+				fee = Self::commit_tx_fee_msat(context.feerate_per_kw, num_htlcs - 1, self.opt_anchors());
+			}
+			let total_pending_htlcs = context.pending_inbound_htlcs.len() + context.pending_outbound_htlcs.len()
+				+ context.holding_cell_htlc_updates.len();
+			let commitment_tx_info = CommitmentTxInfoCached {
+				fee,
+				total_pending_htlcs,
+				next_holder_htlc_id: match htlc.origin {
+					HTLCInitiator::LocalOffered => context.next_holder_htlc_id + 1,
+					HTLCInitiator::RemoteOffered => context.next_holder_htlc_id,
+				},
+				next_counterparty_htlc_id: match htlc.origin {
+					HTLCInitiator::LocalOffered => context.next_counterparty_htlc_id,
+					HTLCInitiator::RemoteOffered => context.next_counterparty_htlc_id + 1,
+				},
+				feerate: context.feerate_per_kw,
+			};
+			*context.next_local_commitment_tx_fee_info_cached.lock().unwrap() = Some(commitment_tx_info);
+		}
+		res
+	}
+
+	// Get the commitment tx fee for the remote's next commitment transaction based on the number of
+	// pending HTLCs that are on track to be in their next commitment tx, plus an additional HTLC if
+	// `fee_spike_buffer_htlc` is Some, plus a new HTLC given by `new_htlc_amount`. Dust HTLCs are
+	// excluded.
+	fn next_remote_commit_tx_fee_msat(&'a self, htlc: HTLCCandidate, fee_spike_buffer_htlc: Option<()>) -> u64 {
+		assert!(!self.is_outbound());
+
+		let context = self.get_context();
+
+		let (htlc_success_dust_limit, htlc_timeout_dust_limit) = if self.opt_anchors() {
+			(0, 0)
+		} else {
+			(context.feerate_per_kw as u64 * htlc_success_tx_weight(false) / 1000,
+				context.feerate_per_kw as u64 * htlc_timeout_tx_weight(false) / 1000)
+		};
+		let real_dust_limit_success_sat = htlc_success_dust_limit + context.counterparty_dust_limit_satoshis;
+		let real_dust_limit_timeout_sat = htlc_timeout_dust_limit + context.counterparty_dust_limit_satoshis;
+
+		let mut addl_htlcs = 0;
+		if fee_spike_buffer_htlc.is_some() { addl_htlcs += 1; }
+		match htlc.origin {
+			HTLCInitiator::LocalOffered => {
+				if htlc.amount_msat / 1000 >= real_dust_limit_success_sat {
+					addl_htlcs += 1;
+				}
+			},
+			HTLCInitiator::RemoteOffered => {
+				if htlc.amount_msat / 1000 >= real_dust_limit_timeout_sat {
+					addl_htlcs += 1;
+				}
+			}
+		}
+
+		// When calculating the set of HTLCs which will be included in their next commitment_signed, all
+		// non-dust inbound HTLCs are included (as all states imply it will be included) and only
+		// committed outbound HTLCs, see below.
+		let mut included_htlcs = 0;
+		for ref htlc in context.pending_inbound_htlcs.iter() {
+			if htlc.amount_msat / 1000 <= real_dust_limit_timeout_sat {
+				continue
+			}
+			included_htlcs += 1;
+		}
+
+		for ref htlc in context.pending_outbound_htlcs.iter() {
+			if htlc.amount_msat / 1000 <= real_dust_limit_success_sat {
+				continue
+			}
+			// We only include outbound HTLCs if it will not be included in their next commitment_signed,
+			// i.e. if they've responded to us with an RAA after announcement.
+			match htlc.state {
+				OutboundHTLCState::Committed => included_htlcs += 1,
+				OutboundHTLCState::RemoteRemoved {..} => included_htlcs += 1,
+				OutboundHTLCState::LocalAnnounced { .. } => included_htlcs += 1,
+				_ => {},
+			}
+		}
+
+		let num_htlcs = included_htlcs + addl_htlcs;
+		let res = Self::commit_tx_fee_msat(context.feerate_per_kw, num_htlcs, self.opt_anchors());
+		#[cfg(any(test, fuzzing))]
+		{
+			let mut fee = res;
+			if fee_spike_buffer_htlc.is_some() {
+				fee = Self::commit_tx_fee_msat(context.feerate_per_kw, num_htlcs - 1, self.opt_anchors());
+			}
+			let total_pending_htlcs = context.pending_inbound_htlcs.len() + context.pending_outbound_htlcs.len();
+			let commitment_tx_info = CommitmentTxInfoCached {
+				fee,
+				total_pending_htlcs,
+				next_holder_htlc_id: match htlc.origin {
+					HTLCInitiator::LocalOffered => context.next_holder_htlc_id + 1,
+					HTLCInitiator::RemoteOffered => context.next_holder_htlc_id,
+				},
+				next_counterparty_htlc_id: match htlc.origin {
+					HTLCInitiator::LocalOffered => context.next_counterparty_htlc_id,
+					HTLCInitiator::RemoteOffered => context.next_counterparty_htlc_id + 1,
+				},
+				feerate: context.feerate_per_kw,
+			};
+			*context.next_remote_commitment_tx_fee_info_cached.lock().unwrap() = Some(commitment_tx_info);
+		}
+		res
+	}
+
+	/// Returns the value to use for `holder_max_htlc_value_in_flight_msat` as a percentage of the
+	/// `channel_value_satoshis` in msat, set through
+	/// [`ChannelHandshakeConfig::max_inbound_htlc_value_in_flight_percent_of_channel`]
+	///
+	/// The effective percentage is lower bounded by 1% and upper bounded by 100%.
+	///
+	/// [`ChannelHandshakeConfig::max_inbound_htlc_value_in_flight_percent_of_channel`]: crate::util::config::ChannelHandshakeConfig::max_inbound_htlc_value_in_flight_percent_of_channel
+	fn get_holder_max_htlc_value_in_flight_msat(channel_value_satoshis: u64, config: &ChannelHandshakeConfig) -> u64 {
+		let configured_percent = if config.max_inbound_htlc_value_in_flight_percent_of_channel < 1 {
+			1
+		} else if config.max_inbound_htlc_value_in_flight_percent_of_channel > 100 {
+			100
+		} else {
+			config.max_inbound_htlc_value_in_flight_percent_of_channel as u64
+		};
+		channel_value_satoshis * 10 * configured_percent
+	}
+
+	// Get the fee cost in MSATS of a commitment tx with a given number of HTLC outputs.
+	// Note that num_htlcs should not include dust HTLCs.
+	fn commit_tx_fee_msat(feerate_per_kw: u32, num_htlcs: usize, opt_anchors: bool) -> u64 {
+		// Note that we need to divide before multiplying to round properly,
+		// since the lowest denomination of bitcoin on-chain is the satoshi.
+		(commitment_tx_base_weight(opt_anchors) + num_htlcs as u64 * COMMITMENT_TX_WEIGHT_PER_HTLC) * feerate_per_kw as u64 / 1000 * 1000
+	}
+
+	// Get the fee cost in SATS of a commitment tx with a given number of HTLC outputs.
+	// Note that num_htlcs should not include dust HTLCs.
+	#[inline]
+	fn commit_tx_fee_sat(feerate_per_kw: u32, num_htlcs: usize, opt_anchors: bool) -> u64 {
+		feerate_per_kw as u64 * (commitment_tx_base_weight(opt_anchors) + num_htlcs as u64 * COMMITMENT_TX_WEIGHT_PER_HTLC) / 1000
+	}
+
+	/// Returns a minimum channel reserve value the remote needs to maintain,
+	/// required by us according to the configured or default
+	/// [`ChannelHandshakeConfig::their_channel_reserve_proportional_millionths`]
+	///
+	/// Guaranteed to return a value no larger than channel_value_satoshis
+	///
+	/// This is used both for outbound and inbound channels and has lower bound
+	/// of `MIN_THEIR_CHAN_RESERVE_SATOSHIS`.
+	fn get_holder_selected_channel_reserve_satoshis(channel_value_satoshis: u64, config: &UserConfig) -> u64 {
+		let calculated_reserve = channel_value_satoshis.saturating_mul(config.channel_handshake_config.their_channel_reserve_proportional_millionths as u64) / 1_000_000;
+		cmp::min(channel_value_satoshis, cmp::max(calculated_reserve, MIN_THEIR_CHAN_RESERVE_SATOSHIS))
+	}
+
+	/// This is for legacy reasons, present for forward-compatibility.
+	/// LDK versions older than 0.0.104 don't know how read/handle values other than default
+	/// from storage. Hence, we use this function to not persist default values of
+	/// `holder_selected_channel_reserve_satoshis` for channels into storage.
+	fn get_legacy_default_holder_selected_channel_reserve_satoshis(channel_value_satoshis: u64) -> u64 {
+		let (q, _) = channel_value_satoshis.overflowing_div(100);
+		cmp::min(channel_value_satoshis, cmp::max(q, 1000))
+	}
+}
+
+impl<'a, Signer: WriteableEcdsaChannelSigner + 'a> ChannelInterface<'a, Signer> for Channel<Signer> {
+	fn get_context(&'a self) -> &'a ChannelContext<Signer> {
+		&self.context
+	}
+
+	fn get_context_mut(&'a mut self) -> &'a mut ChannelContext<Signer> {
+		&mut self.context
+	}
+}
+
 // TODO: We should refactor this to be an Inbound/OutboundChannel until initial setup handshaking
 // has been completed, and then turn into a Channel to get compiler-time enforcement of things like
 // calling channel_id() before we're set up or things like get_outbound_funding_signed on an
@@ -856,32 +1838,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 			config.max_inbound_htlc_value_in_flight_percent_of_channel as u64
 		};
 		channel_value_satoshis * 10 * configured_percent
-	}
-
-	/// Returns a minimum channel reserve value the remote needs to maintain,
-	/// required by us according to the configured or default
-	/// [`ChannelHandshakeConfig::their_channel_reserve_proportional_millionths`]
-	///
-	/// Guaranteed to return a value no larger than channel_value_satoshis
-	///
-	/// This is used both for outbound and inbound channels and has lower bound
-	/// of `MIN_THEIR_CHAN_RESERVE_SATOSHIS`.
-	pub(crate) fn get_holder_selected_channel_reserve_satoshis(channel_value_satoshis: u64, config: &UserConfig) -> u64 {
-		let calculated_reserve = channel_value_satoshis.saturating_mul(config.channel_handshake_config.their_channel_reserve_proportional_millionths as u64) / 1_000_000;
-		cmp::min(channel_value_satoshis, cmp::max(calculated_reserve, MIN_THEIR_CHAN_RESERVE_SATOSHIS))
-	}
-
-	/// This is for legacy reasons, present for forward-compatibility.
-	/// LDK versions older than 0.0.104 don't know how read/handle values other than default
-	/// from storage. Hence, we use this function to not persist default values of
-	/// `holder_selected_channel_reserve_satoshis` for channels into storage.
-	pub(crate) fn get_legacy_default_holder_selected_channel_reserve_satoshis(channel_value_satoshis: u64) -> u64 {
-		let (q, _) = channel_value_satoshis.overflowing_div(100);
-		cmp::min(channel_value_satoshis, cmp::max(q, 1000))
-	}
-
-	pub(crate) fn opt_anchors(&self) -> bool {
-		self.context.channel_transaction_parameters.opt_anchors.is_some()
 	}
 
 	fn get_initial_channel_type(config: &UserConfig, their_features: &InitFeatures) -> ChannelTypeFeatures {
@@ -1477,253 +2433,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 		Ok(chan)
 	}
 
-	/// Transaction nomenclature is somewhat confusing here as there are many different cases - a
-	/// transaction is referred to as "a's transaction" implying that a will be able to broadcast
-	/// the transaction. Thus, b will generally be sending a signature over such a transaction to
-	/// a, and a can revoke the transaction by providing b the relevant per_commitment_secret. As
-	/// such, a transaction is generally the result of b increasing the amount paid to a (or adding
-	/// an HTLC to a).
-	/// @local is used only to convert relevant internal structures which refer to remote vs local
-	/// to decide value of outputs and direction of HTLCs.
-	/// @generated_by_local is used to determine *which* HTLCs to include - noting that the HTLC
-	/// state may indicate that one peer has informed the other that they'd like to add an HTLC but
-	/// have not yet committed it. Such HTLCs will only be included in transactions which are being
-	/// generated by the peer which proposed adding the HTLCs, and thus we need to understand both
-	/// which peer generated this transaction and "to whom" this transaction flows.
-	#[inline]
-	fn build_commitment_transaction<L: Deref>(&self, commitment_number: u64, keys: &TxCreationKeys, local: bool, generated_by_local: bool, logger: &L) -> CommitmentStats
-		where L::Target: Logger
-	{
-		let mut included_dust_htlcs: Vec<(HTLCOutputInCommitment, Option<&HTLCSource>)> = Vec::new();
-		let num_htlcs = self.context.pending_inbound_htlcs.len() + self.context.pending_outbound_htlcs.len();
-		let mut included_non_dust_htlcs: Vec<(HTLCOutputInCommitment, Option<&HTLCSource>)> = Vec::with_capacity(num_htlcs);
-
-		let broadcaster_dust_limit_satoshis = if local { self.context.holder_dust_limit_satoshis } else { self.context.counterparty_dust_limit_satoshis };
-		let mut remote_htlc_total_msat = 0;
-		let mut local_htlc_total_msat = 0;
-		let mut value_to_self_msat_offset = 0;
-
-		let mut feerate_per_kw = self.context.feerate_per_kw;
-		if let Some((feerate, update_state)) = self.context.pending_update_fee {
-			if match update_state {
-				// Note that these match the inclusion criteria when scanning
-				// pending_inbound_htlcs below.
-				FeeUpdateState::RemoteAnnounced => { debug_assert!(!self.is_outbound()); !generated_by_local },
-				FeeUpdateState::AwaitingRemoteRevokeToAnnounce => { debug_assert!(!self.is_outbound()); !generated_by_local },
-				FeeUpdateState::Outbound => { assert!(self.is_outbound());  generated_by_local },
-			} {
-				feerate_per_kw = feerate;
-			}
-		}
-
-		log_trace!(logger, "Building commitment transaction number {} (really {} xor {}) for channel {} for {}, generated by {} with fee {}...",
-			commitment_number, (INITIAL_COMMITMENT_NUMBER - commitment_number),
-			get_commitment_transaction_number_obscure_factor(&self.get_holder_pubkeys().payment_point, &self.get_counterparty_pubkeys().payment_point, self.is_outbound()),
-			log_bytes!(self.context.channel_id), if local { "us" } else { "remote" }, if generated_by_local { "us" } else { "remote" }, feerate_per_kw);
-
-		macro_rules! get_htlc_in_commitment {
-			($htlc: expr, $offered: expr) => {
-				HTLCOutputInCommitment {
-					offered: $offered,
-					amount_msat: $htlc.amount_msat,
-					cltv_expiry: $htlc.cltv_expiry,
-					payment_hash: $htlc.payment_hash,
-					transaction_output_index: None
-				}
-			}
-		}
-
-		macro_rules! add_htlc_output {
-			($htlc: expr, $outbound: expr, $source: expr, $state_name: expr) => {
-				if $outbound == local { // "offered HTLC output"
-					let htlc_in_tx = get_htlc_in_commitment!($htlc, true);
-					let htlc_tx_fee = if self.opt_anchors() {
-						0
-					} else {
-						feerate_per_kw as u64 * htlc_timeout_tx_weight(false) / 1000
-					};
-					if $htlc.amount_msat / 1000 >= broadcaster_dust_limit_satoshis + htlc_tx_fee {
-						log_trace!(logger, "   ...including {} {} HTLC {} (hash {}) with value {}", if $outbound { "outbound" } else { "inbound" }, $state_name, $htlc.htlc_id, log_bytes!($htlc.payment_hash.0), $htlc.amount_msat);
-						included_non_dust_htlcs.push((htlc_in_tx, $source));
-					} else {
-						log_trace!(logger, "   ...including {} {} dust HTLC {} (hash {}) with value {} due to dust limit", if $outbound { "outbound" } else { "inbound" }, $state_name, $htlc.htlc_id, log_bytes!($htlc.payment_hash.0), $htlc.amount_msat);
-						included_dust_htlcs.push((htlc_in_tx, $source));
-					}
-				} else {
-					let htlc_in_tx = get_htlc_in_commitment!($htlc, false);
-					let htlc_tx_fee = if self.opt_anchors() {
-						0
-					} else {
-						feerate_per_kw as u64 * htlc_success_tx_weight(false) / 1000
-					};
-					if $htlc.amount_msat / 1000 >= broadcaster_dust_limit_satoshis + htlc_tx_fee {
-						log_trace!(logger, "   ...including {} {} HTLC {} (hash {}) with value {}", if $outbound { "outbound" } else { "inbound" }, $state_name, $htlc.htlc_id, log_bytes!($htlc.payment_hash.0), $htlc.amount_msat);
-						included_non_dust_htlcs.push((htlc_in_tx, $source));
-					} else {
-						log_trace!(logger, "   ...including {} {} dust HTLC {} (hash {}) with value {}", if $outbound { "outbound" } else { "inbound" }, $state_name, $htlc.htlc_id, log_bytes!($htlc.payment_hash.0), $htlc.amount_msat);
-						included_dust_htlcs.push((htlc_in_tx, $source));
-					}
-				}
-			}
-		}
-
-		for ref htlc in self.context.pending_inbound_htlcs.iter() {
-			let (include, state_name) = match htlc.state {
-				InboundHTLCState::RemoteAnnounced(_) => (!generated_by_local, "RemoteAnnounced"),
-				InboundHTLCState::AwaitingRemoteRevokeToAnnounce(_) => (!generated_by_local, "AwaitingRemoteRevokeToAnnounce"),
-				InboundHTLCState::AwaitingAnnouncedRemoteRevoke(_) => (true, "AwaitingAnnouncedRemoteRevoke"),
-				InboundHTLCState::Committed => (true, "Committed"),
-				InboundHTLCState::LocalRemoved(_) => (!generated_by_local, "LocalRemoved"),
-			};
-
-			if include {
-				add_htlc_output!(htlc, false, None, state_name);
-				remote_htlc_total_msat += htlc.amount_msat;
-			} else {
-				log_trace!(logger, "   ...not including inbound HTLC {} (hash {}) with value {} due to state ({})", htlc.htlc_id, log_bytes!(htlc.payment_hash.0), htlc.amount_msat, state_name);
-				match &htlc.state {
-					&InboundHTLCState::LocalRemoved(ref reason) => {
-						if generated_by_local {
-							if let &InboundHTLCRemovalReason::Fulfill(_) = reason {
-								value_to_self_msat_offset += htlc.amount_msat as i64;
-							}
-						}
-					},
-					_ => {},
-				}
-			}
-		}
-
-		let mut preimages: Vec<PaymentPreimage> = Vec::new();
-
-		for ref htlc in self.context.pending_outbound_htlcs.iter() {
-			let (include, state_name) = match htlc.state {
-				OutboundHTLCState::LocalAnnounced(_) => (generated_by_local, "LocalAnnounced"),
-				OutboundHTLCState::Committed => (true, "Committed"),
-				OutboundHTLCState::RemoteRemoved(_) => (generated_by_local, "RemoteRemoved"),
-				OutboundHTLCState::AwaitingRemoteRevokeToRemove(_) => (generated_by_local, "AwaitingRemoteRevokeToRemove"),
-				OutboundHTLCState::AwaitingRemovedRemoteRevoke(_) => (false, "AwaitingRemovedRemoteRevoke"),
-			};
-
-			let preimage_opt = match htlc.state {
-				OutboundHTLCState::RemoteRemoved(OutboundHTLCOutcome::Success(p)) => p,
-				OutboundHTLCState::AwaitingRemoteRevokeToRemove(OutboundHTLCOutcome::Success(p)) => p,
-				OutboundHTLCState::AwaitingRemovedRemoteRevoke(OutboundHTLCOutcome::Success(p)) => p,
-				_ => None,
-			};
-
-			if let Some(preimage) = preimage_opt {
-				preimages.push(preimage);
-			}
-
-			if include {
-				add_htlc_output!(htlc, true, Some(&htlc.source), state_name);
-				local_htlc_total_msat += htlc.amount_msat;
-			} else {
-				log_trace!(logger, "   ...not including outbound HTLC {} (hash {}) with value {} due to state ({})", htlc.htlc_id, log_bytes!(htlc.payment_hash.0), htlc.amount_msat, state_name);
-				match htlc.state {
-					OutboundHTLCState::AwaitingRemoteRevokeToRemove(OutboundHTLCOutcome::Success(_))|OutboundHTLCState::AwaitingRemovedRemoteRevoke(OutboundHTLCOutcome::Success(_)) => {
-						value_to_self_msat_offset -= htlc.amount_msat as i64;
-					},
-					OutboundHTLCState::RemoteRemoved(OutboundHTLCOutcome::Success(_)) => {
-						if !generated_by_local {
-							value_to_self_msat_offset -= htlc.amount_msat as i64;
-						}
-					},
-					_ => {},
-				}
-			}
-		}
-
-		let mut value_to_self_msat: i64 = (self.context.value_to_self_msat - local_htlc_total_msat) as i64 + value_to_self_msat_offset;
-		assert!(value_to_self_msat >= 0);
-		// Note that in case they have several just-awaiting-last-RAA fulfills in-progress (ie
-		// AwaitingRemoteRevokeToRemove or AwaitingRemovedRemoteRevoke) we may have allowed them to
-		// "violate" their reserve value by couting those against it. Thus, we have to convert
-		// everything to i64 before subtracting as otherwise we can overflow.
-		let mut value_to_remote_msat: i64 = (self.context.channel_value_satoshis * 1000) as i64 - (self.context.value_to_self_msat as i64) - (remote_htlc_total_msat as i64) - value_to_self_msat_offset;
-		assert!(value_to_remote_msat >= 0);
-
-		#[cfg(debug_assertions)]
-		{
-			// Make sure that the to_self/to_remote is always either past the appropriate
-			// channel_reserve *or* it is making progress towards it.
-			let mut broadcaster_max_commitment_tx_output = if generated_by_local {
-				self.context.holder_max_commitment_tx_output.lock().unwrap()
-			} else {
-				self.context.counterparty_max_commitment_tx_output.lock().unwrap()
-			};
-			debug_assert!(broadcaster_max_commitment_tx_output.0 <= value_to_self_msat as u64 || value_to_self_msat / 1000 >= self.context.counterparty_selected_channel_reserve_satoshis.unwrap() as i64);
-			broadcaster_max_commitment_tx_output.0 = cmp::max(broadcaster_max_commitment_tx_output.0, value_to_self_msat as u64);
-			debug_assert!(broadcaster_max_commitment_tx_output.1 <= value_to_remote_msat as u64 || value_to_remote_msat / 1000 >= self.context.holder_selected_channel_reserve_satoshis as i64);
-			broadcaster_max_commitment_tx_output.1 = cmp::max(broadcaster_max_commitment_tx_output.1, value_to_remote_msat as u64);
-		}
-
-		let total_fee_sat = Channel::<Signer>::commit_tx_fee_sat(feerate_per_kw, included_non_dust_htlcs.len(), self.context.channel_transaction_parameters.opt_anchors.is_some());
-		let anchors_val = if self.context.channel_transaction_parameters.opt_anchors.is_some() { ANCHOR_OUTPUT_VALUE_SATOSHI * 2 } else { 0 } as i64;
-		let (value_to_self, value_to_remote) = if self.is_outbound() {
-			(value_to_self_msat / 1000 - anchors_val - total_fee_sat as i64, value_to_remote_msat / 1000)
-		} else {
-			(value_to_self_msat / 1000, value_to_remote_msat / 1000 - anchors_val - total_fee_sat as i64)
-		};
-
-		let mut value_to_a = if local { value_to_self } else { value_to_remote };
-		let mut value_to_b = if local { value_to_remote } else { value_to_self };
-		let (funding_pubkey_a, funding_pubkey_b) = if local {
-			(self.get_holder_pubkeys().funding_pubkey, self.get_counterparty_pubkeys().funding_pubkey)
-		} else {
-			(self.get_counterparty_pubkeys().funding_pubkey, self.get_holder_pubkeys().funding_pubkey)
-		};
-
-		if value_to_a >= (broadcaster_dust_limit_satoshis as i64) {
-			log_trace!(logger, "   ...including {} output with value {}", if local { "to_local" } else { "to_remote" }, value_to_a);
-		} else {
-			value_to_a = 0;
-		}
-
-		if value_to_b >= (broadcaster_dust_limit_satoshis as i64) {
-			log_trace!(logger, "   ...including {} output with value {}", if local { "to_remote" } else { "to_local" }, value_to_b);
-		} else {
-			value_to_b = 0;
-		}
-
-		let num_nondust_htlcs = included_non_dust_htlcs.len();
-
-		let channel_parameters =
-			if local { self.context.channel_transaction_parameters.as_holder_broadcastable() }
-			else { self.context.channel_transaction_parameters.as_counterparty_broadcastable() };
-		let tx = CommitmentTransaction::new_with_auxiliary_htlc_data(commitment_number,
-		                                                             value_to_a as u64,
-		                                                             value_to_b as u64,
-		                                                             self.context.channel_transaction_parameters.opt_anchors.is_some(),
-		                                                             funding_pubkey_a,
-		                                                             funding_pubkey_b,
-		                                                             keys.clone(),
-		                                                             feerate_per_kw,
-		                                                             &mut included_non_dust_htlcs,
-		                                                             &channel_parameters
-		);
-		let mut htlcs_included = included_non_dust_htlcs;
-		// The unwrap is safe, because all non-dust HTLCs have been assigned an output index
-		htlcs_included.sort_unstable_by_key(|h| h.0.transaction_output_index.unwrap());
-		htlcs_included.append(&mut included_dust_htlcs);
-
-		// For the stats, trimmed-to-0 the value in msats accordingly
-		value_to_self_msat = if (value_to_self_msat * 1000) < broadcaster_dust_limit_satoshis as i64 { 0 } else { value_to_self_msat };
-		value_to_remote_msat = if (value_to_remote_msat * 1000) < broadcaster_dust_limit_satoshis as i64 { 0 } else { value_to_remote_msat };
-
-		CommitmentStats {
-			tx,
-			feerate_per_kw,
-			total_fee_sat,
-			num_nondust_htlcs,
-			htlcs_included,
-			local_balance_msat: value_to_self_msat as u64,
-			remote_balance_msat: value_to_remote_msat as u64,
-			preimages
-		}
-	}
-
 	#[inline]
 	fn get_closing_scriptpubkey(&self) -> Script {
 		// The shutdown scriptpubkey is set on channel opening when option_upfront_shutdown_script
@@ -1796,42 +2505,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 
 	fn funding_outpoint(&self) -> OutPoint {
 		self.context.channel_transaction_parameters.funding_outpoint.unwrap()
-	}
-
-	#[inline]
-	/// Creates a set of keys for build_commitment_transaction to generate a transaction which our
-	/// counterparty will sign (ie DO NOT send signatures over a transaction created by this to
-	/// our counterparty!)
-	/// The result is a transaction which we can revoke broadcastership of (ie a "local" transaction)
-	/// TODO Some magic rust shit to compile-time check this?
-	fn build_holder_transaction_keys(&self, commitment_number: u64) -> TxCreationKeys {
-		let per_commitment_point = self.context.holder_signer.get_per_commitment_point(commitment_number, &self.context.secp_ctx);
-		let delayed_payment_base = &self.get_holder_pubkeys().delayed_payment_basepoint;
-		let htlc_basepoint = &self.get_holder_pubkeys().htlc_basepoint;
-		let counterparty_pubkeys = self.get_counterparty_pubkeys();
-
-		TxCreationKeys::derive_new(&self.context.secp_ctx, &per_commitment_point, delayed_payment_base, htlc_basepoint, &counterparty_pubkeys.revocation_basepoint, &counterparty_pubkeys.htlc_basepoint)
-	}
-
-	#[inline]
-	/// Creates a set of keys for build_commitment_transaction to generate a transaction which we
-	/// will sign and send to our counterparty.
-	/// If an Err is returned, it is a ChannelError::Close (for get_outbound_funding_created)
-	fn build_remote_transaction_keys(&self) -> TxCreationKeys {
-		//TODO: Ensure that the payment_key derived here ends up in the library users' wallet as we
-		//may see payments to it!
-		let revocation_basepoint = &self.get_holder_pubkeys().revocation_basepoint;
-		let htlc_basepoint = &self.get_holder_pubkeys().htlc_basepoint;
-		let counterparty_pubkeys = self.get_counterparty_pubkeys();
-
-		TxCreationKeys::derive_new(&self.context.secp_ctx, &self.context.counterparty_cur_commitment_point.unwrap(), &counterparty_pubkeys.delayed_payment_basepoint, &counterparty_pubkeys.htlc_basepoint, revocation_basepoint, htlc_basepoint)
-	}
-
-	/// Gets the redeemscript for the funding transaction output (ie the funding transaction output
-	/// pays to get_funding_redeemscript().to_v0_p2wsh()).
-	/// Panics if called before accept_channel/new_from_req
-	pub fn get_funding_redeemscript(&self) -> Script {
-		make_funding_redeemscript(&self.get_holder_pubkeys().funding_pubkey, self.counterparty_funding_pubkey())
 	}
 
 	/// Claims an HTLC while we're disconnected from a peer, dropping the [`ChannelMonitorUpdate`]
@@ -2275,10 +2948,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 		Ok((counterparty_initial_bitcoin_tx.txid, initial_commitment_tx, counterparty_signature))
 	}
 
-	fn counterparty_funding_pubkey(&self) -> &PublicKey {
-		&self.get_counterparty_pubkeys().funding_pubkey
-	}
-
 	pub fn funding_created<SP: Deref, L: Deref>(
 		&mut self, msg: &msgs::FundingCreated, best_block: BestBlock, signer_provider: &SP, logger: &L
 	) -> Result<(msgs::FundingSigned, ChannelMonitor<Signer>), ChannelError>
@@ -2611,240 +3280,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 			}
 		}
 		stats
-	}
-
-	/// Get the available balances, see [`AvailableBalances`]'s fields for more info.
-	/// Doesn't bother handling the
-	/// if-we-removed-it-already-but-haven't-fully-resolved-they-can-still-send-an-inbound-HTLC
-	/// corner case properly.
-	pub fn get_available_balances(&self) -> AvailableBalances {
-		// Note that we have to handle overflow due to the above case.
-		let outbound_stats = self.get_outbound_pending_htlc_stats(None);
-
-		let mut balance_msat = self.context.value_to_self_msat;
-		for ref htlc in self.context.pending_inbound_htlcs.iter() {
-			if let InboundHTLCState::LocalRemoved(InboundHTLCRemovalReason::Fulfill(_)) = htlc.state {
-				balance_msat += htlc.amount_msat;
-			}
-		}
-		balance_msat -= outbound_stats.pending_htlcs_value_msat;
-
-		let outbound_capacity_msat = cmp::max(self.context.value_to_self_msat as i64
-				- outbound_stats.pending_htlcs_value_msat as i64
-				- self.context.counterparty_selected_channel_reserve_satoshis.unwrap_or(0) as i64 * 1000,
-			0) as u64;
-		AvailableBalances {
-			inbound_capacity_msat: cmp::max(self.context.channel_value_satoshis as i64 * 1000
-					- self.context.value_to_self_msat as i64
-					- self.get_inbound_pending_htlc_stats(None).pending_htlcs_value_msat as i64
-					- self.context.holder_selected_channel_reserve_satoshis as i64 * 1000,
-				0) as u64,
-			outbound_capacity_msat,
-			next_outbound_htlc_limit_msat: cmp::max(cmp::min(outbound_capacity_msat as i64,
-					self.context.counterparty_max_htlc_value_in_flight_msat as i64
-						- outbound_stats.pending_htlcs_value_msat as i64),
-				0) as u64,
-			balance_msat,
-		}
-	}
-
-	pub fn get_holder_counterparty_selected_channel_reserve_satoshis(&self) -> (u64, Option<u64>) {
-		(self.context.holder_selected_channel_reserve_satoshis, self.context.counterparty_selected_channel_reserve_satoshis)
-	}
-
-	// Get the fee cost in MSATS of a commitment tx with a given number of HTLC outputs.
-	// Note that num_htlcs should not include dust HTLCs.
-	fn commit_tx_fee_msat(feerate_per_kw: u32, num_htlcs: usize, opt_anchors: bool) -> u64 {
-		// Note that we need to divide before multiplying to round properly,
-		// since the lowest denomination of bitcoin on-chain is the satoshi.
-		(commitment_tx_base_weight(opt_anchors) + num_htlcs as u64 * COMMITMENT_TX_WEIGHT_PER_HTLC) * feerate_per_kw as u64 / 1000 * 1000
-	}
-
-	// Get the fee cost in SATS of a commitment tx with a given number of HTLC outputs.
-	// Note that num_htlcs should not include dust HTLCs.
-	#[inline]
-	fn commit_tx_fee_sat(feerate_per_kw: u32, num_htlcs: usize, opt_anchors: bool) -> u64 {
-		feerate_per_kw as u64 * (commitment_tx_base_weight(opt_anchors) + num_htlcs as u64 * COMMITMENT_TX_WEIGHT_PER_HTLC) / 1000
-	}
-
-	// Get the commitment tx fee for the local's (i.e. our) next commitment transaction based on the
-	// number of pending HTLCs that are on track to be in our next commitment tx, plus an additional
-	// HTLC if `fee_spike_buffer_htlc` is Some, plus a new HTLC given by `new_htlc_amount`. Dust HTLCs
-	// are excluded.
-	fn next_local_commit_tx_fee_msat(&self, htlc: HTLCCandidate, fee_spike_buffer_htlc: Option<()>) -> u64 {
-		assert!(self.is_outbound());
-
-		let (htlc_success_dust_limit, htlc_timeout_dust_limit) = if self.opt_anchors() {
-			(0, 0)
-		} else {
-			(self.context.feerate_per_kw as u64 * htlc_success_tx_weight(false) / 1000,
-				self.context.feerate_per_kw as u64 * htlc_timeout_tx_weight(false) / 1000)
-		};
-		let real_dust_limit_success_sat = htlc_success_dust_limit + self.context.holder_dust_limit_satoshis;
-		let real_dust_limit_timeout_sat = htlc_timeout_dust_limit + self.context.holder_dust_limit_satoshis;
-
-		let mut addl_htlcs = 0;
-		if fee_spike_buffer_htlc.is_some() { addl_htlcs += 1; }
-		match htlc.origin {
-			HTLCInitiator::LocalOffered => {
-				if htlc.amount_msat / 1000 >= real_dust_limit_timeout_sat {
-					addl_htlcs += 1;
-				}
-			},
-			HTLCInitiator::RemoteOffered => {
-				if htlc.amount_msat / 1000 >= real_dust_limit_success_sat {
-					addl_htlcs += 1;
-				}
-			}
-		}
-
-		let mut included_htlcs = 0;
-		for ref htlc in self.context.pending_inbound_htlcs.iter() {
-			if htlc.amount_msat / 1000 < real_dust_limit_success_sat {
-				continue
-			}
-			// We include LocalRemoved HTLCs here because we may still need to broadcast a commitment
-			// transaction including this HTLC if it times out before they RAA.
-			included_htlcs += 1;
-		}
-
-		for ref htlc in self.context.pending_outbound_htlcs.iter() {
-			if htlc.amount_msat / 1000 < real_dust_limit_timeout_sat {
-				continue
-			}
-			match htlc.state {
-				OutboundHTLCState::LocalAnnounced {..} => included_htlcs += 1,
-				OutboundHTLCState::Committed => included_htlcs += 1,
-				OutboundHTLCState::RemoteRemoved {..} => included_htlcs += 1,
-				// We don't include AwaitingRemoteRevokeToRemove HTLCs because our next commitment
-				// transaction won't be generated until they send us their next RAA, which will mean
-				// dropping any HTLCs in this state.
-				_ => {},
-			}
-		}
-
-		for htlc in self.context.holding_cell_htlc_updates.iter() {
-			match htlc {
-				&HTLCUpdateAwaitingACK::AddHTLC { amount_msat, .. } => {
-					if amount_msat / 1000 < real_dust_limit_timeout_sat {
-						continue
-					}
-					included_htlcs += 1
-				},
-				_ => {}, // Don't include claims/fails that are awaiting ack, because once we get the
-				         // ack we're guaranteed to never include them in commitment txs anymore.
-			}
-		}
-
-		let num_htlcs = included_htlcs + addl_htlcs;
-		let res = Self::commit_tx_fee_msat(self.context.feerate_per_kw, num_htlcs, self.opt_anchors());
-		#[cfg(any(test, fuzzing))]
-		{
-			let mut fee = res;
-			if fee_spike_buffer_htlc.is_some() {
-				fee = Self::commit_tx_fee_msat(self.context.feerate_per_kw, num_htlcs - 1, self.opt_anchors());
-			}
-			let total_pending_htlcs = self.context.pending_inbound_htlcs.len() + self.context.pending_outbound_htlcs.len()
-				+ self.context.holding_cell_htlc_updates.len();
-			let commitment_tx_info = CommitmentTxInfoCached {
-				fee,
-				total_pending_htlcs,
-				next_holder_htlc_id: match htlc.origin {
-					HTLCInitiator::LocalOffered => self.context.next_holder_htlc_id + 1,
-					HTLCInitiator::RemoteOffered => self.context.next_holder_htlc_id,
-				},
-				next_counterparty_htlc_id: match htlc.origin {
-					HTLCInitiator::LocalOffered => self.context.next_counterparty_htlc_id,
-					HTLCInitiator::RemoteOffered => self.context.next_counterparty_htlc_id + 1,
-				},
-				feerate: self.context.feerate_per_kw,
-			};
-			*self.context.next_local_commitment_tx_fee_info_cached.lock().unwrap() = Some(commitment_tx_info);
-		}
-		res
-	}
-
-	// Get the commitment tx fee for the remote's next commitment transaction based on the number of
-	// pending HTLCs that are on track to be in their next commitment tx, plus an additional HTLC if
-	// `fee_spike_buffer_htlc` is Some, plus a new HTLC given by `new_htlc_amount`. Dust HTLCs are
-	// excluded.
-	fn next_remote_commit_tx_fee_msat(&self, htlc: HTLCCandidate, fee_spike_buffer_htlc: Option<()>) -> u64 {
-		assert!(!self.is_outbound());
-
-		let (htlc_success_dust_limit, htlc_timeout_dust_limit) = if self.opt_anchors() {
-			(0, 0)
-		} else {
-			(self.context.feerate_per_kw as u64 * htlc_success_tx_weight(false) / 1000,
-				self.context.feerate_per_kw as u64 * htlc_timeout_tx_weight(false) / 1000)
-		};
-		let real_dust_limit_success_sat = htlc_success_dust_limit + self.context.counterparty_dust_limit_satoshis;
-		let real_dust_limit_timeout_sat = htlc_timeout_dust_limit + self.context.counterparty_dust_limit_satoshis;
-
-		let mut addl_htlcs = 0;
-		if fee_spike_buffer_htlc.is_some() { addl_htlcs += 1; }
-		match htlc.origin {
-			HTLCInitiator::LocalOffered => {
-				if htlc.amount_msat / 1000 >= real_dust_limit_success_sat {
-					addl_htlcs += 1;
-				}
-			},
-			HTLCInitiator::RemoteOffered => {
-				if htlc.amount_msat / 1000 >= real_dust_limit_timeout_sat {
-					addl_htlcs += 1;
-				}
-			}
-		}
-
-		// When calculating the set of HTLCs which will be included in their next commitment_signed, all
-		// non-dust inbound HTLCs are included (as all states imply it will be included) and only
-		// committed outbound HTLCs, see below.
-		let mut included_htlcs = 0;
-		for ref htlc in self.context.pending_inbound_htlcs.iter() {
-			if htlc.amount_msat / 1000 <= real_dust_limit_timeout_sat {
-				continue
-			}
-			included_htlcs += 1;
-		}
-
-		for ref htlc in self.context.pending_outbound_htlcs.iter() {
-			if htlc.amount_msat / 1000 <= real_dust_limit_success_sat {
-				continue
-			}
-			// We only include outbound HTLCs if it will not be included in their next commitment_signed,
-			// i.e. if they've responded to us with an RAA after announcement.
-			match htlc.state {
-				OutboundHTLCState::Committed => included_htlcs += 1,
-				OutboundHTLCState::RemoteRemoved {..} => included_htlcs += 1,
-				OutboundHTLCState::LocalAnnounced { .. } => included_htlcs += 1,
-				_ => {},
-			}
-		}
-
-		let num_htlcs = included_htlcs + addl_htlcs;
-		let res = Self::commit_tx_fee_msat(self.context.feerate_per_kw, num_htlcs, self.opt_anchors());
-		#[cfg(any(test, fuzzing))]
-		{
-			let mut fee = res;
-			if fee_spike_buffer_htlc.is_some() {
-				fee = Self::commit_tx_fee_msat(self.context.feerate_per_kw, num_htlcs - 1, self.opt_anchors());
-			}
-			let total_pending_htlcs = self.context.pending_inbound_htlcs.len() + self.context.pending_outbound_htlcs.len();
-			let commitment_tx_info = CommitmentTxInfoCached {
-				fee,
-				total_pending_htlcs,
-				next_holder_htlc_id: match htlc.origin {
-					HTLCInitiator::LocalOffered => self.context.next_holder_htlc_id + 1,
-					HTLCInitiator::RemoteOffered => self.context.next_holder_htlc_id,
-				},
-				next_counterparty_htlc_id: match htlc.origin {
-					HTLCInitiator::LocalOffered => self.context.next_counterparty_htlc_id,
-					HTLCInitiator::RemoteOffered => self.context.next_counterparty_htlc_id + 1,
-				},
-				feerate: self.context.feerate_per_kw,
-			};
-			*self.context.next_remote_commitment_tx_fee_info_cached.lock().unwrap() = Some(commitment_tx_info);
-		}
-		res
 	}
 
 	pub fn update_add_htlc<F, L: Deref>(&mut self, msg: &msgs::UpdateAddHTLC, mut pending_forward_status: PendingHTLCStatus, create_pending_htlc_status: F, logger: &L) -> Result<(), ChannelError>
@@ -4556,202 +4991,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 		}
 	}
 
-	// Public utilities:
-
-	pub fn channel_id(&self) -> [u8; 32] {
-		self.context.channel_id
-	}
-
-	pub fn minimum_depth(&self) -> Option<u32> {
-		self.context.minimum_depth
-	}
-
-	/// Gets the "user_id" value passed into the construction of this channel. It has no special
-	/// meaning and exists only to allow users to have a persistent identifier of a channel.
-	pub fn get_user_id(&self) -> u128 {
-		self.context.user_id
-	}
-
-	/// Gets the channel's type
-	pub fn get_channel_type(&self) -> &ChannelTypeFeatures {
-		&self.context.channel_type
-	}
-
-	/// Guaranteed to be Some after both ChannelReady messages have been exchanged (and, thus,
-	/// is_usable() returns true).
-	/// Allowed in any state (including after shutdown)
-	pub fn get_short_channel_id(&self) -> Option<u64> {
-		self.context.short_channel_id
-	}
-
-	/// Allowed in any state (including after shutdown)
-	pub fn latest_inbound_scid_alias(&self) -> Option<u64> {
-		self.context.latest_inbound_scid_alias
-	}
-
-	/// Allowed in any state (including after shutdown)
-	pub fn outbound_scid_alias(&self) -> u64 {
-		self.context.outbound_scid_alias
-	}
-	/// Only allowed immediately after deserialization if get_outbound_scid_alias returns 0,
-	/// indicating we were written by LDK prior to 0.0.106 which did not set outbound SCID aliases.
-	pub fn set_outbound_scid_alias(&mut self, outbound_scid_alias: u64) {
-		assert_eq!(self.context.outbound_scid_alias, 0);
-		self.context.outbound_scid_alias = outbound_scid_alias;
-	}
-
-	/// Returns the funding_txo we either got from our peer, or were given by
-	/// get_outbound_funding_created.
-	pub fn get_funding_txo(&self) -> Option<OutPoint> {
-		self.context.channel_transaction_parameters.funding_outpoint
-	}
-
-	/// Returns the block hash in which our funding transaction was confirmed.
-	pub fn get_funding_tx_confirmed_in(&self) -> Option<BlockHash> {
-		self.context.funding_tx_confirmed_in
-	}
-
-	/// Returns the current number of confirmations on the funding transaction.
-	pub fn get_funding_tx_confirmations(&self, height: u32) -> u32 {
-		if self.context.funding_tx_confirmation_height == 0 {
-			// We either haven't seen any confirmation yet, or observed a reorg.
-			return 0;
-		}
-
-		height.checked_sub(self.context.funding_tx_confirmation_height).map_or(0, |c| c + 1)
-	}
-
-	fn get_holder_selected_contest_delay(&self) -> u16 {
-		self.context.channel_transaction_parameters.holder_selected_contest_delay
-	}
-
-	fn get_holder_pubkeys(&self) -> &ChannelPublicKeys {
-		&self.context.channel_transaction_parameters.holder_pubkeys
-	}
-
-	pub fn get_counterparty_selected_contest_delay(&self) -> Option<u16> {
-		self.context.channel_transaction_parameters.counterparty_parameters
-			.as_ref().map(|params| params.selected_contest_delay)
-	}
-
-	fn get_counterparty_pubkeys(&self) -> &ChannelPublicKeys {
-		&self.context.channel_transaction_parameters.counterparty_parameters.as_ref().unwrap().pubkeys
-	}
-
-	/// Allowed in any state (including after shutdown)
-	pub fn get_counterparty_node_id(&self) -> PublicKey {
-		self.context.counterparty_node_id
-	}
-
-	/// Allowed in any state (including after shutdown)
-	pub fn get_holder_htlc_minimum_msat(&self) -> u64 {
-		self.context.holder_htlc_minimum_msat
-	}
-
-	/// Allowed in any state (including after shutdown), but will return none before TheirInitSent
-	pub fn get_holder_htlc_maximum_msat(&self) -> Option<u64> {
-		self.get_htlc_maximum_msat(self.context.holder_max_htlc_value_in_flight_msat)
-	}
-
-	/// Allowed in any state (including after shutdown)
-	pub fn get_announced_htlc_max_msat(&self) -> u64 {
-		return cmp::min(
-			// Upper bound by capacity. We make it a bit less than full capacity to prevent attempts
-			// to use full capacity. This is an effort to reduce routing failures, because in many cases
-			// channel might have been used to route very small values (either by honest users or as DoS).
-			self.context.channel_value_satoshis * 1000 * 9 / 10,
-
-			self.context.counterparty_max_htlc_value_in_flight_msat
-		);
-	}
-
-	/// Allowed in any state (including after shutdown)
-	pub fn get_counterparty_htlc_minimum_msat(&self) -> u64 {
-		self.context.counterparty_htlc_minimum_msat
-	}
-
-	/// Allowed in any state (including after shutdown), but will return none before TheirInitSent
-	pub fn get_counterparty_htlc_maximum_msat(&self) -> Option<u64> {
-		self.get_htlc_maximum_msat(self.context.counterparty_max_htlc_value_in_flight_msat)
-	}
-
-	fn get_htlc_maximum_msat(&self, party_max_htlc_value_in_flight_msat: u64) -> Option<u64> {
-		self.context.counterparty_selected_channel_reserve_satoshis.map(|counterparty_reserve| {
-			let holder_reserve = self.context.holder_selected_channel_reserve_satoshis;
-			cmp::min(
-				(self.context.channel_value_satoshis - counterparty_reserve - holder_reserve) * 1000,
-				party_max_htlc_value_in_flight_msat
-			)
-		})
-	}
-
-	pub fn get_value_satoshis(&self) -> u64 {
-		self.context.channel_value_satoshis
-	}
-
-	pub fn get_fee_proportional_millionths(&self) -> u32 {
-		self.context.config.options.forwarding_fee_proportional_millionths
-	}
-
-	pub fn get_cltv_expiry_delta(&self) -> u16 {
-		cmp::max(self.context.config.options.cltv_expiry_delta, MIN_CLTV_EXPIRY_DELTA)
-	}
-
-	pub fn get_max_dust_htlc_exposure_msat(&self) -> u64 {
-		self.context.config.options.max_dust_htlc_exposure_msat
-	}
-
-	/// Returns the previous [`ChannelConfig`] applied to this channel, if any.
-	pub fn prev_config(&self) -> Option<ChannelConfig> {
-		self.context.prev_config.map(|prev_config| prev_config.0)
-	}
-
-	// Checks whether we should emit a `ChannelReady` event.
-	pub(crate) fn should_emit_channel_ready_event(&mut self) -> bool {
-		self.is_usable() && !self.context.channel_ready_event_emitted
-	}
-
-	// Remembers that we already emitted a `ChannelReady` event.
-	pub(crate) fn set_channel_ready_event_emitted(&mut self) {
-		self.context.channel_ready_event_emitted = true;
-	}
-
-	/// Tracks the number of ticks elapsed since the previous [`ChannelConfig`] was updated. Once
-	/// [`EXPIRE_PREV_CONFIG_TICKS`] is reached, the previous config is considered expired and will
-	/// no longer be considered when forwarding HTLCs.
-	pub fn maybe_expire_prev_config(&mut self) {
-		if self.context.prev_config.is_none() {
-			return;
-		}
-		let prev_config = self.context.prev_config.as_mut().unwrap();
-		prev_config.1 += 1;
-		if prev_config.1 == EXPIRE_PREV_CONFIG_TICKS {
-			self.context.prev_config = None;
-		}
-	}
-
-	/// Returns the current [`ChannelConfig`] applied to the channel.
-	pub fn config(&self) -> ChannelConfig {
-		self.context.config.options
-	}
-
-	/// Updates the channel's config. A bool is returned indicating whether the config update
-	/// applied resulted in a new ChannelUpdate message.
-	pub fn update_config(&mut self, config: &ChannelConfig) -> bool {
-		let did_channel_update =
-			self.context.config.options.forwarding_fee_proportional_millionths != config.forwarding_fee_proportional_millionths ||
-			self.context.config.options.forwarding_fee_base_msat != config.forwarding_fee_base_msat ||
-			self.context.config.options.cltv_expiry_delta != config.cltv_expiry_delta;
-		if did_channel_update {
-			self.context.prev_config = Some((self.context.config.options, 0));
-			// Update the counter, which backs the ChannelUpdate timestamp, to allow the relay
-			// policy change to propagate throughout the network.
-			self.context.update_time_counter += 1;
-		}
-		self.context.config.options = *config;
-		did_channel_update
-	}
-
 	fn internal_htlc_satisfies_config(
 		&self, htlc: &msgs::UpdateAddHTLC, amt_to_forward: u64, outgoing_cltv_value: u32, config: &ChannelConfig,
 	) -> Result<(), (&'static str, u16)> {
@@ -4787,28 +5026,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 					Err(err)
 				}
 			})
-	}
-
-	pub fn get_feerate_sat_per_1000_weight(&self) -> u32 {
-		self.context.feerate_per_kw
-	}
-
-	pub fn get_dust_buffer_feerate(&self, outbound_feerate_update: Option<u32>) -> u32 {
-		// When calculating our exposure to dust HTLCs, we assume that the channel feerate
-		// may, at any point, increase by at least 10 sat/vB (i.e 2530 sat/kWU) or 25%,
-		// whichever is higher. This ensures that we aren't suddenly exposed to significantly
-		// more dust balance if the feerate increases when we have several HTLCs pending
-		// which are near the dust limit.
-		let mut feerate_per_kw = self.context.feerate_per_kw;
-		// If there's a pending update fee, use it to ensure we aren't under-estimating
-		// potential feerate updates coming soon.
-		if let Some((feerate, _)) = self.context.pending_update_fee {
-			feerate_per_kw = cmp::max(feerate_per_kw, feerate);
-		}
-		if let Some(feerate) = outbound_feerate_update {
-			feerate_per_kw = cmp::max(feerate_per_kw, feerate);
-		}
-		cmp::max(2530, feerate_per_kw * 1250 / 1000)
 	}
 
 	pub fn get_cur_holder_commitment_transaction_number(&self) -> u64 {
@@ -4853,32 +5070,10 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 		}
 	}
 
-	/// Allowed in any state (including after shutdown)
-	pub fn get_update_time_counter(&self) -> u32 {
-		self.context.update_time_counter
-	}
-
-	pub fn get_latest_monitor_update_id(&self) -> u64 {
-		self.context.latest_monitor_update_id
-	}
-
-	pub fn should_announce(&self) -> bool {
-		self.context.config.announced_channel
-	}
-
-	pub fn is_outbound(&self) -> bool {
-		self.context.channel_transaction_parameters.is_outbound_from_holder
-	}
-
 	/// Gets the fee we'd want to charge for adding an HTLC output to this Channel
 	/// Allowed in any state (including after shutdown)
 	pub fn get_outbound_forwarding_fee_base_msat(&self) -> u32 {
 		self.context.config.options.forwarding_fee_base_msat
-	}
-
-	/// Returns true if we've ever received a message from the remote end for this Channel
-	pub fn have_received_message(&self) -> bool {
-		self.context.channel_state > (ChannelState::OurInitSent as u32)
 	}
 
 	/// Returns true if this channel is fully established and not known to be closing.
@@ -4903,11 +5098,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 
 	pub fn get_next_monitor_update(&self) -> Option<&ChannelMonitorUpdate> {
 		self.context.pending_monitor_updates.first()
-	}
-
-	/// Returns true if funding_created was sent/received.
-	pub fn is_funding_initiated(&self) -> bool {
-		self.context.channel_state >= ChannelState::FundingSent as u32
 	}
 
 	/// Returns true if the channel is awaiting the persistence of the initial ChannelMonitor.
@@ -5949,11 +6139,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 		}
 	}
 
-	/// Get forwarding information for the counterparty.
-	pub fn counterparty_forwarding_info(&self) -> Option<CounterpartyForwardingInfo> {
-		self.context.counterparty_forwarding_info.clone()
-	}
-
 	pub fn channel_update(&mut self, msg: &msgs::ChannelUpdate) -> Result<(), ChannelError> {
 		if msg.contents.htlc_minimum_msat >= self.context.channel_value_satoshis * 1000 {
 			return Err(ChannelError::Close("Minimum htlc value is greater than channel value".to_string()));
@@ -6058,52 +6243,6 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 			"we can't both complete shutdown and return a monitor update");
 
 		Ok((shutdown, monitor_update, dropped_outbound_htlcs))
-	}
-
-	/// Gets the latest commitment transaction and any dependent transactions for relay (forcing
-	/// shutdown of this channel - no more calls into this Channel may be made afterwards except
-	/// those explicitly stated to be allowed after shutdown completes, eg some simple getters).
-	/// Also returns the list of payment_hashes for channels which we can safely fail backwards
-	/// immediately (others we will have to allow to time out).
-	pub fn force_shutdown(&mut self, should_broadcast: bool) -> (Option<(OutPoint, ChannelMonitorUpdate)>, Vec<(HTLCSource, PaymentHash, PublicKey, [u8; 32])>) {
-		// Note that we MUST only generate a monitor update that indicates force-closure - we're
-		// called during initialization prior to the chain_monitor in the encompassing ChannelManager
-		// being fully configured in some cases. Thus, its likely any monitor events we generate will
-		// be delayed in being processed! See the docs for `ChannelManagerReadArgs` for more.
-		assert!(self.context.channel_state != ChannelState::ShutdownComplete as u32);
-
-		// We go ahead and "free" any holding cell HTLCs or HTLCs we haven't yet committed to and
-		// return them to fail the payment.
-		let mut dropped_outbound_htlcs = Vec::with_capacity(self.context.holding_cell_htlc_updates.len());
-		let counterparty_node_id = self.get_counterparty_node_id();
-		for htlc_update in self.context.holding_cell_htlc_updates.drain(..) {
-			match htlc_update {
-				HTLCUpdateAwaitingACK::AddHTLC { source, payment_hash, .. } => {
-					dropped_outbound_htlcs.push((source, payment_hash, counterparty_node_id, self.context.channel_id));
-				},
-				_ => {}
-			}
-		}
-		let monitor_update = if let Some(funding_txo) = self.get_funding_txo() {
-			// If we haven't yet exchanged funding signatures (ie channel_state < FundingSent),
-			// returning a channel monitor update here would imply a channel monitor update before
-			// we even registered the channel monitor to begin with, which is invalid.
-			// Thus, if we aren't actually at a point where we could conceivably broadcast the
-			// funding transaction, don't return a funding txo (which prevents providing the
-			// monitor update to the user, even if we return one).
-			// See test_duplicate_chan_id and test_pre_lockin_no_chan_closed_update for more.
-			if self.context.channel_state & (ChannelState::FundingSent as u32 | ChannelState::ChannelReady as u32 | ChannelState::ShutdownComplete as u32) != 0 {
-				self.context.latest_monitor_update_id += 1;
-				Some((funding_txo, ChannelMonitorUpdate {
-					update_id: self.context.latest_monitor_update_id,
-					updates: vec![ChannelMonitorUpdateStep::ChannelForceClosed { should_broadcast }],
-				}))
-			} else { None }
-		} else { None };
-
-		self.context.channel_state = ChannelState::ShutdownComplete as u32;
-		self.context.update_time_counter += 1;
-		(monitor_update, dropped_outbound_htlcs)
 	}
 
 	pub fn inflight_htlc_sources(&self) -> impl Iterator<Item=(&HTLCSource, &PaymentHash)> {
@@ -6947,7 +7086,7 @@ mod tests {
 	use crate::ln::channelmanager::{self, HTLCSource, PaymentId};
 	#[cfg(anchors)]
 	use crate::ln::channel::InitFeatures;
-	use crate::ln::channel::{Channel, InboundHTLCOutput, OutboundHTLCOutput, InboundHTLCState, OutboundHTLCState, HTLCCandidate, HTLCInitiator};
+	use crate::ln::channel::{Channel, ChannelInterface, InboundHTLCOutput, OutboundHTLCOutput, InboundHTLCState, OutboundHTLCState, HTLCCandidate, HTLCInitiator};
 	use crate::ln::channel::{MAX_FUNDING_SATOSHIS_NO_WUMBO, TOTAL_BITCOIN_SUPPLY_SATOSHIS, MIN_THEIR_CHAN_RESERVE_SATOSHIS};
 	use crate::ln::features::ChannelTypeFeatures;
 	use crate::ln::msgs::{ChannelUpdate, DataLossProtect, DecodeError, OptionalField, UnsignedChannelUpdate, MAX_VALUE_MSAT};
