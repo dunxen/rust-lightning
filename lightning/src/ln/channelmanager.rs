@@ -40,7 +40,7 @@ use crate::events::{Event, EventHandler, EventsProvider, MessageSendEvent, Messa
 // Since this struct is returned in `list_channels` methods, expose it here in case users want to
 // construct one themselves.
 use crate::ln::{inbound_payment, PaymentHash, PaymentPreimage, PaymentSecret};
-use crate::ln::channel::{Channel, ChannelError, ChannelUpdateStatus, UpdateFulfillCommitFetch};
+use crate::ln::channel::{Channel, ChannelInterface, ChannelError, ChannelUpdateStatus, UpdateFulfillCommitFetch};
 use crate::ln::features::{ChannelFeatures, ChannelTypeFeatures, InitFeatures, NodeFeatures};
 #[cfg(any(feature = "_test_utils", test))]
 use crate::ln::features::InvoiceFeatures;
@@ -55,7 +55,9 @@ use crate::ln::msgs::{ChannelMessageHandler, DecodeError, LightningError, MAX_VA
 use crate::ln::outbound_payment;
 use crate::ln::outbound_payment::{OutboundPayments, PaymentAttempts, PendingOutboundPayment};
 use crate::ln::wire::Encode;
-use crate::chain::keysinterface::{EntropySource, KeysManager, NodeSigner, Recipient, SignerProvider, ChannelSigner, WriteableEcdsaChannelSigner};
+use crate::chain::keysinterface::{EntropySource, KeysManager, NodeSigner, Recipient, SignerProvider, ChannelSigner};
+#[cfg(any(test, feature = "_test_utils"))]
+use crate::chain::keysinterface::WriteableEcdsaChannelSigner;
 use crate::util::config::{UserConfig, ChannelConfig};
 use crate::util::wakers::{Future, Notifier};
 use crate::util::scid_utils::fake_scid;
@@ -1330,56 +1332,6 @@ impl ChannelDetails {
 	pub fn get_outbound_payment_scid(&self) -> Option<u64> {
 		self.short_channel_id.or(self.outbound_scid_alias)
 	}
-
-	fn from_channel<Signer: WriteableEcdsaChannelSigner>(channel: &Channel<Signer>,
-		best_block_height: u32, latest_features: InitFeatures) -> Self {
-
-		let balance = channel.get_available_balances();
-		let (to_remote_reserve_satoshis, to_self_reserve_satoshis) =
-			channel.get_holder_counterparty_selected_channel_reserve_satoshis();
-		ChannelDetails {
-			channel_id: channel.channel_id(),
-			counterparty: ChannelCounterparty {
-				node_id: channel.get_counterparty_node_id(),
-				features: latest_features,
-				unspendable_punishment_reserve: to_remote_reserve_satoshis,
-				forwarding_info: channel.counterparty_forwarding_info(),
-				// Ensures that we have actually received the `htlc_minimum_msat` value
-				// from the counterparty through the `OpenChannel` or `AcceptChannel`
-				// message (as they are always the first message from the counterparty).
-				// Else `Channel::get_counterparty_htlc_minimum_msat` could return the
-				// default `0` value set by `Channel::new_outbound`.
-				outbound_htlc_minimum_msat: if channel.have_received_message() {
-					Some(channel.get_counterparty_htlc_minimum_msat()) } else { None },
-				outbound_htlc_maximum_msat: channel.get_counterparty_htlc_maximum_msat(),
-			},
-			funding_txo: channel.get_funding_txo(),
-			// Note that accept_channel (or open_channel) is always the first message, so
-			// `have_received_message` indicates that type negotiation has completed.
-			channel_type: if channel.have_received_message() { Some(channel.get_channel_type().clone()) } else { None },
-			short_channel_id: channel.get_short_channel_id(),
-			outbound_scid_alias: if channel.is_usable() { Some(channel.outbound_scid_alias()) } else { None },
-			inbound_scid_alias: channel.latest_inbound_scid_alias(),
-			channel_value_satoshis: channel.get_value_satoshis(),
-			feerate_sat_per_1000_weight: Some(channel.get_feerate_sat_per_1000_weight()),
-			unspendable_punishment_reserve: to_self_reserve_satoshis,
-			balance_msat: balance.balance_msat,
-			inbound_capacity_msat: balance.inbound_capacity_msat,
-			outbound_capacity_msat: balance.outbound_capacity_msat,
-			next_outbound_htlc_limit_msat: balance.next_outbound_htlc_limit_msat,
-			user_channel_id: channel.get_user_id(),
-			confirmations_required: channel.minimum_depth(),
-			confirmations: Some(channel.get_funding_tx_confirmations(best_block_height)),
-			force_close_spend_delay: channel.get_counterparty_selected_contest_delay(),
-			is_outbound: channel.is_outbound(),
-			is_channel_ready: channel.is_usable(),
-			is_usable: channel.is_live(),
-			is_public: channel.should_announce(),
-			inbound_htlc_minimum_msat: Some(channel.get_holder_htlc_minimum_msat()),
-			inbound_htlc_maximum_msat: channel.get_holder_htlc_maximum_msat(),
-			config: Some(channel.config()),
-		}
-	}
 }
 
 /// Used by [`ChannelManager::list_recent_payments`] to express the status of recent payments.
@@ -1934,8 +1886,7 @@ where
 				let mut peer_state_lock = peer_state_mutex.lock().unwrap();
 				let peer_state = &mut *peer_state_lock;
 				for (_channel_id, channel) in peer_state.channel_by_id.iter().filter(f) {
-					let details = ChannelDetails::from_channel(channel, best_block_height,
-						peer_state.latest_features.clone());
+					let details = channel.get_channel_details(best_block_height, peer_state.latest_features.clone());
 					res.push(details);
 				}
 			}
@@ -1974,7 +1925,7 @@ where
 			return peer_state.channel_by_id
 				.iter()
 				.map(|(_, channel)|
-					ChannelDetails::from_channel(channel, best_block_height, features.clone()))
+					channel.get_channel_details(best_block_height, features.clone()))
 				.collect();
 		}
 		vec![]

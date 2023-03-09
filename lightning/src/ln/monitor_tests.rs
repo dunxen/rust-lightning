@@ -19,7 +19,7 @@ use crate::chain::chaininterface::LowerBoundedFeeEstimator;
 #[cfg(anchors)]
 use crate::events::bump_transaction::BumpTransactionEvent;
 use crate::events::{Event, MessageSendEvent, MessageSendEventsProvider, ClosureReason, HTLCDestination};
-use crate::ln::channel;
+use crate::ln::channel::{self, ChannelInterface};
 #[cfg(anchors)]
 use crate::ln::chan_utils;
 #[cfg(anchors)]
