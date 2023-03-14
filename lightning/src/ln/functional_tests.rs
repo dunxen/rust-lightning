@@ -21,7 +21,7 @@ use crate::chain::keysinterface::{ChannelSigner, EcdsaChannelSigner, EntropySour
 use crate::ln::{PaymentPreimage, PaymentSecret, PaymentHash};
 use crate::ln::channel::{ChannelInterface, commitment_tx_base_weight, COMMITMENT_TX_WEIGHT_PER_HTLC, CONCURRENT_INBOUND_HTLC_FEE_BUFFER, FEE_SPIKE_BUFFER_FEE_INCREASE_MULTIPLE, MIN_AFFORDABLE_HTLC_COUNT};
 use crate::ln::channelmanager::{self, PaymentId, RAACommitmentOrder, PaymentSendFailure, BREAKDOWN_TIMEOUT, MIN_CLTV_EXPIRY_DELTA};
-use crate::ln::channel::{Channel, ChannelError};
+use crate::ln::channel::{FundedChannel, ChannelError};
 use crate::ln::{chan_utils, onion_utils};
 use crate::ln::chan_utils::{OFFERED_HTLC_SCRIPT_WEIGHT, htlc_success_tx_weight, htlc_timeout_tx_weight, HTLCOutputInCommitment};
 use crate::routing::gossip::{NetworkGraph, NetworkUpdate};
@@ -76,7 +76,7 @@ fn test_insane_channel_opens() {
 	// Instantiate channel parameters where we push the maximum msats given our
 	// funding satoshis
 	let channel_value_sat = 31337; // same as funding satoshis
-	let channel_reserve_satoshis = Channel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(channel_value_sat, &cfg);
+	let channel_reserve_satoshis = FundedChannel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(channel_value_sat, &cfg);
 	let push_msat = (channel_value_sat - channel_reserve_satoshis) * 1000;
 
 	// Have node0 initiate a channel to node1 with aforementioned parameters
@@ -158,7 +158,7 @@ fn do_test_counterparty_no_reserve(send_from_initiator: bool) {
 	let feerate_per_kw = 253;
 	let opt_anchors = false;
 	push_amt -= feerate_per_kw as u64 * (commitment_tx_base_weight(opt_anchors) + 4 * COMMITMENT_TX_WEIGHT_PER_HTLC) / 1000 * 1000;
-	push_amt -= Channel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
+	push_amt -= FundedChannel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
 
 	let temp_channel_id = nodes[0].node.create_channel(nodes[1].node.get_our_node_id(), 100_000, if send_from_initiator { 0 } else { push_amt }, 42, None).unwrap();
 	let mut open_channel_message = get_event_msg!(nodes[0], MessageSendEvent::SendOpenChannel, nodes[1].node.get_our_node_id());
@@ -642,7 +642,7 @@ fn test_update_fee_that_funder_cannot_afford() {
 	let channel_id = chan.2;
 	let secp_ctx = Secp256k1::new();
 	let default_config = UserConfig::default();
-	let bs_channel_reserve_sats = Channel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(channel_value, &default_config);
+	let bs_channel_reserve_sats = FundedChannel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(channel_value, &default_config);
 
 	let opt_anchors = false;
 
@@ -1503,7 +1503,7 @@ fn test_chan_reserve_violation_outbound_htlc_inbound_chan() {
 	let mut push_amt = 100_000_000;
 	push_amt -= commit_tx_fee_msat(feerate_per_kw, MIN_AFFORDABLE_HTLC_COUNT as u64, opt_anchors);
 
-	push_amt -= Channel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
+	push_amt -= FundedChannel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
 
 	let _ = create_announced_chan_between_nodes_with_value(&nodes, 0, 1, 100_000, push_amt);
 
@@ -1535,7 +1535,7 @@ fn test_chan_reserve_violation_inbound_htlc_outbound_channel() {
 	// transaction fee with 0 HTLCs (183 sats)).
 	let mut push_amt = 100_000_000;
 	push_amt -= commit_tx_fee_msat(feerate_per_kw, MIN_AFFORDABLE_HTLC_COUNT as u64, opt_anchors);
-	push_amt -= Channel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
+	push_amt -= FundedChannel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
 	let chan = create_announced_chan_between_nodes_with_value(&nodes, 0, 1, 100_000, push_amt);
 
 	// Send four HTLCs to cover the initial push_msat buffer we're required to include
@@ -1588,7 +1588,7 @@ fn test_chan_reserve_dust_inbound_htlcs_outbound_chan() {
 	// transaction fee with 0 HTLCs (183 sats)).
 	let mut push_amt = 100_000_000;
 	push_amt -= commit_tx_fee_msat(feerate_per_kw, MIN_AFFORDABLE_HTLC_COUNT as u64, opt_anchors);
-	push_amt -= Channel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
+	push_amt -= FundedChannel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
 	create_announced_chan_between_nodes_with_value(&nodes, 0, 1, 100000, push_amt);
 
 	let dust_amt = crate::ln::channel::MIN_CHAN_DUST_LIMIT_SATOSHIS * 1000
@@ -1630,7 +1630,7 @@ fn test_chan_init_feerate_unaffordability() {
 
 	// During open, we don't have a "counterparty channel reserve" to check against, so that
 	// requirement only comes into play on the open_channel handling side.
-	push_amt -= Channel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
+	push_amt -= FundedChannel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config) * 1000;
 	nodes[0].node.create_channel(nodes[1].node.get_our_node_id(), 100_000, push_amt, 42, None).unwrap();
 	let mut open_channel_msg = get_event_msg!(nodes[0], MessageSendEvent::SendOpenChannel, nodes[1].node.get_our_node_id());
 	open_channel_msg.push_msat += 1;
@@ -1753,7 +1753,7 @@ fn test_inbound_outbound_capacity_is_not_zero() {
 	assert_eq!(channels0.len(), 1);
 	assert_eq!(channels1.len(), 1);
 
-	let reserve = Channel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config);
+	let reserve = FundedChannel::<EnforcingSigner>::get_holder_selected_channel_reserve_satoshis(100_000, &default_config);
 	assert_eq!(channels0[0].inbound_capacity_msat, 95000000 - reserve*1000);
 	assert_eq!(channels1[0].outbound_capacity_msat, 95000000 - reserve*1000);
 
@@ -6892,7 +6892,7 @@ fn test_user_configurable_csv_delay() {
 	let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
 
 	// We test config.our_to_self > BREAKDOWN_TIMEOUT is enforced in Channel::new_outbound()
-	if let Err(error) = Channel::new_outbound(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator { sat_per_kw: Mutex::new(253) }),
+	if let Err(error) = FundedChannel::new_outbound(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator { sat_per_kw: Mutex::new(253) }),
 		&nodes[0].keys_manager, &nodes[0].keys_manager, nodes[1].node.get_our_node_id(), &nodes[1].node.init_features(), 1000000, 1000000, 0,
 		&low_our_to_self_config, 0, 42)
 	{
@@ -6906,7 +6906,7 @@ fn test_user_configurable_csv_delay() {
 	nodes[1].node.create_channel(nodes[0].node.get_our_node_id(), 1000000, 1000000, 42, None).unwrap();
 	let mut open_channel = get_event_msg!(nodes[1], MessageSendEvent::SendOpenChannel, nodes[0].node.get_our_node_id());
 	open_channel.to_self_delay = 200;
-	if let Err(error) = Channel::new_from_req(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator { sat_per_kw: Mutex::new(253) }),
+	if let Err(error) = FundedChannel::new_from_req(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator { sat_per_kw: Mutex::new(253) }),
 		&nodes[0].keys_manager, &nodes[0].keys_manager, nodes[1].node.get_our_node_id(), &nodes[0].node.channel_type_features(), &nodes[1].node.init_features(), &open_channel, 0,
 		&low_our_to_self_config, 0, &nodes[0].logger, 42)
 	{
@@ -6938,7 +6938,7 @@ fn test_user_configurable_csv_delay() {
 	nodes[1].node.create_channel(nodes[0].node.get_our_node_id(), 1000000, 1000000, 42, None).unwrap();
 	let mut open_channel = get_event_msg!(nodes[1], MessageSendEvent::SendOpenChannel, nodes[0].node.get_our_node_id());
 	open_channel.to_self_delay = 200;
-	if let Err(error) = Channel::new_from_req(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator { sat_per_kw: Mutex::new(253) }),
+	if let Err(error) = FundedChannel::new_from_req(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator { sat_per_kw: Mutex::new(253) }),
 		&nodes[0].keys_manager, &nodes[0].keys_manager, nodes[1].node.get_our_node_id(), &nodes[0].node.channel_type_features(), &nodes[1].node.init_features(), &open_channel, 0,
 		&high_their_to_self_config, 0, &nodes[0].logger, 42)
 	{
