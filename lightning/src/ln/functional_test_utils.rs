@@ -689,7 +689,7 @@ macro_rules! get_channel_ref {
 		{
 			$per_peer_state_lock = $node.node.per_peer_state.read().unwrap();
 			$peer_state_lock = $per_peer_state_lock.get(&$counterparty_node.node.get_our_node_id()).unwrap().lock().unwrap();
-			$peer_state_lock.channel_by_id.get_mut(&$channel_id).unwrap()
+			$peer_state_lock.funded_channel_by_id.get_mut(&$channel_id).unwrap()
 		}
 	}
 }
@@ -2090,7 +2090,7 @@ pub fn do_claim_payment_along_route<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, 
 						let per_peer_state = $node.node.per_peer_state.read().unwrap();
 						let peer_state = per_peer_state.get(&$prev_node.node.get_our_node_id())
 							.unwrap().lock().unwrap();
-						let channel = peer_state.channel_by_id.get(&next_msgs.as_ref().unwrap().0.channel_id).unwrap();
+						let channel = peer_state.funded_channel_by_id.get(&next_msgs.as_ref().unwrap().0.channel_id).unwrap();
 						if let Some(prev_config) = channel.prev_config() {
 							prev_config.forwarding_fee_base_msat
 						} else {
@@ -2592,7 +2592,7 @@ macro_rules! get_channel_value_stat {
 	($node: expr, $counterparty_node: expr, $channel_id: expr) => {{
 		let peer_state_lock = $node.node.per_peer_state.read().unwrap();
 		let chan_lock = peer_state_lock.get(&$counterparty_node.node.get_our_node_id()).unwrap().lock().unwrap();
-		let chan = chan_lock.channel_by_id.get(&$channel_id).unwrap();
+		let chan = chan_lock.funded_channel_by_id.get(&$channel_id).unwrap();
 		chan.get_value_stat()
 	}}
 }
