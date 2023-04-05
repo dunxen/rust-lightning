@@ -1887,6 +1887,26 @@ impl<'a, Signer: WriteableEcdsaChannelSigner + 'a> ChannelInterface<'a, Signer> 
 	}
 }
 
+impl<'a, Signer: WriteableEcdsaChannelSigner + 'a> ChannelInterface<'a, Signer> for OutboundV1Channel<Signer> {
+	fn get_context(&'a self) -> &'a ChannelContext<Signer> {
+		&self.context
+	}
+
+	fn get_context_mut(&'a mut self) -> &'a mut ChannelContext<Signer> {
+		&mut self.context
+	}
+}
+
+impl<'a, Signer: WriteableEcdsaChannelSigner + 'a> ChannelInterface<'a, Signer> for InboundV1Channel<Signer> {
+	fn get_context(&'a self) -> &'a ChannelContext<Signer> {
+		&self.context
+	}
+
+	fn get_context_mut(&'a mut self) -> &'a mut ChannelContext<Signer> {
+		&mut self.context
+	}
+}
+
 // TODO: We should refactor this to be an Inbound/OutboundChannel until initial setup handshaking
 // has been completed, and then turn into a Channel to get compiler-time enforcement of things like
 // calling channel_id() before we're set up or things like get_outbound_funding_signed on an
@@ -6385,6 +6405,26 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 		self.context.workaround_lnd_bug_4006.take()
 	}
 }
+
+// A not-yet-funded outbound (from holder) channel using V1 channel establishment.
+pub(super) struct OutboundV1Channel<Signer: ChannelSigner> {
+	#[cfg(not(test))]
+	context: ChannelContext<Signer>,
+	#[cfg(test)]
+	pub context: ChannelContext<Signer>,
+}
+
+impl<Signer: WriteableEcdsaChannelSigner> OutboundV1Channel<Signer> {}
+
+// A not-yet-funded inbound (from counterparty) channel using V1 channel establishment.
+pub(super) struct InboundV1Channel<Signer: ChannelSigner> {
+	#[cfg(not(test))]
+	context: ChannelContext<Signer>,
+	#[cfg(test)]
+	pub context: ChannelContext<Signer>,
+}
+
+impl<Signer: WriteableEcdsaChannelSigner> InboundV1Channel<Signer> {}
 
 const SERIALIZATION_VERSION: u8 = 3;
 const MIN_SERIALIZATION_VERSION: u8 = 2;
