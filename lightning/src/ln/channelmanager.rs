@@ -4674,13 +4674,18 @@ where
 		num_unfunded_channels
 	}
 
-	fn internal_open_channel(&self, counterparty_node_id: &PublicKey, msg: &msgs::OpenChannel) -> Result<(), MsgHandleErrInternal> {
-		if msg.chain_hash != self.genesis_hash {
-			return Err(MsgHandleErrInternal::send_err_msg_no_close("Unknown genesis block hash".to_owned(), msg.temporary_channel_id.clone()));
+	/// Verifies common requirements for V1 and V2 channel open requests.
+	fn check_open_channel_common(&self, counterparty_node_id: &PublicKey, chain_hash: &BlockHash,
+		temporary_channel_id: &[u8; 32]) -> Result<(
+			&PeerState<<SP::Target as SignerProvider>::Signer>,
+			u32 /* best_block_height */, u64 /* outbound_scid_alias */, u128 /* user_channel_id */),
+		MsgHandleErrInternal> {
+		if chain_hash != self.genesis_hash {
+			return Err(MsgHandleErrInternal::send_err_msg_no_close("Unknown genesis block hash".to_owned(), temporary_channel_id.clone()));
 		}
 
 		if !self.default_configuration.accept_inbound_channels {
-			return Err(MsgHandleErrInternal::send_err_msg_no_close("No inbound channels accepted".to_owned(), msg.temporary_channel_id.clone()));
+			return Err(MsgHandleErrInternal::send_err_msg_no_close("No inbound channels accepted".to_owned(), temporary_channel_id.clone()));
 		}
 
 		let mut random_bytes = [0u8; 16];
@@ -4698,7 +4703,7 @@ where
 		let peer_state_mutex = per_peer_state.get(counterparty_node_id)
 		    .ok_or_else(|| {
 				debug_assert!(false);
-				MsgHandleErrInternal::send_err_msg_no_close(format!("Can't find a peer matching the passed counterparty node_id {}", counterparty_node_id), msg.temporary_channel_id.clone())
+				MsgHandleErrInternal::send_err_msg_no_close(format!("Can't find a peer matching the passed counterparty node_id {}", counterparty_node_id), temporary_channel_id.clone())
 			})?;
 		let mut peer_state_lock = peer_state_mutex.lock().unwrap();
 		let peer_state = &mut *peer_state_lock;
@@ -4712,15 +4717,21 @@ where
 		{
 			return Err(MsgHandleErrInternal::send_err_msg_no_close(
 				"Have too many peers with unfunded channels, not accepting new ones".to_owned(),
-				msg.temporary_channel_id.clone()));
+				temporary_channel_id.clone()));
 		}
 
 		let best_block_height = self.best_block.read().unwrap().height();
 		if Self::unfunded_channel_count(peer_state, best_block_height) >= MAX_UNFUNDED_CHANS_PER_PEER {
 			return Err(MsgHandleErrInternal::send_err_msg_no_close(
 				format!("Refusing more than {} unfunded channels.", MAX_UNFUNDED_CHANS_PER_PEER),
-				msg.temporary_channel_id.clone()));
+				temporary_channel_id.clone()));
 		}
+		Ok((peer_state, best_block_height, outbound_scid_alias, user_channel_id))
+	}
+
+	fn internal_open_channel(&self, counterparty_node_id: &PublicKey, msg: &msgs::OpenChannel) -> Result<(), MsgHandleErrInternal> {
+		let (peer_state, best_block_height, outbound_scid_alias, user_channel_id) =
+			self.check_open_channel_common(counterparty_node_id, &msg.chain_hash, &msg.temporary_channel_id)?;
 
 		let mut channel = match InboundV1Channel::new_from_req(&self.fee_estimator, &self.entropy_source, &self.signer_provider,
 			counterparty_node_id.clone(), &self.channel_type_features(), &peer_state.latest_features, msg, user_channel_id,
