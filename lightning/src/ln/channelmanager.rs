@@ -8359,25 +8359,37 @@ where
 		}
 
 		if let Some(in_flight_upds) = in_flight_monitor_updates {
-			for ((counterparty_id, funding_txo), chan_in_flight_updates) in in_flight_upds {
-				// Now that we've removed all the in-flight monitor updates for channels that are
-				// still open, we need to replay any monitor updates that are for closed channels,
-				// creating the neccessary peer_state entries as we go.
-				let peer_state_mutex = per_peer_state.entry(counterparty_id).or_insert_with(|| {
-					Mutex::new(peer_state_from_chans(HashMap::new()))
-				});
-				let mut peer_state = peer_state_mutex.lock().unwrap();
-				for update in chan_in_flight_updates.iter() {
-					log_trace!(args.logger, "Replaying ChannelMonitorUpdate {} for closed channel {}",
-						update.update_id, log_bytes!(funding_txo.to_channel_id()));
-					pending_background_events.push(
-						BackgroundEvent::MonitorUpdateRegeneratedOnStartup {
-							counterparty_node_id: counterparty_id,
-							funding_txo, update: update.clone(),
-						});
-				}
-				if peer_state.in_flight_monitor_updates.insert(funding_txo, chan_in_flight_updates).is_some() {
-					log_error!(args.logger, "Duplicate in-flight monitor update set for the same channel!");
+			for ((counterparty_id, funding_txo), mut chan_in_flight_updates) in in_flight_upds {
+				if let Some(monitor) = args.channel_monitors.get(&funding_txo) {
+					// Now that we've removed all the in-flight monitor updates for channels that are
+					// still open, we need to replay any monitor updates that are for closed channels,
+					// creating the neccessary peer_state entries as we go.
+					let peer_state_mutex = per_peer_state.entry(counterparty_id).or_insert_with(|| {
+						Mutex::new(peer_state_from_chans(HashMap::new()))
+					});
+					let mut peer_state = peer_state_mutex.lock().unwrap();
+					chan_in_flight_updates.retain(|upd| upd.update_id > monitor.get_latest_update_id());
+					for update in chan_in_flight_updates.iter() {
+						log_trace!(args.logger, "Replaying ChannelMonitorUpdate {} for closed channel {}",
+							update.update_id, log_bytes!(funding_txo.to_channel_id()));
+						pending_background_events.push(
+							BackgroundEvent::MonitorUpdateRegeneratedOnStartup {
+								counterparty_node_id: counterparty_id,
+								funding_txo, update: update.clone(),
+							});
+					}
+					if peer_state.in_flight_monitor_updates.insert(funding_txo, chan_in_flight_updates).is_some() {
+						log_error!(args.logger, "Duplicate in-flight monitor update set for the same channel!");
+						return Err(DecodeError::InvalidValue);
+					}
+				} else {
+					log_error!(args.logger, "A ChannelMonitor is missing even though we have in-flight updates for it! This indicates a potentially-critical violation of the chain::Watch API!");
+					log_error!(args.logger, " The ChannelMonitor for channel {} is missing.",
+						log_bytes!(funding_txo.to_channel_id()));
+					log_error!(args.logger, " The chain::Watch API *requires* that monitors are persisted durably before returning,");
+					log_error!(args.logger, " client applications must ensure that ChannelMonitor data is always available and the latest to avoid funds loss!");
+					log_error!(args.logger, " Without the latest ChannelMonitor we cannot continue without risking funds.");
+					log_error!(args.logger, " Please ensure the chain::Watch API requirements are met and file a bug report at https://github.com/lightningdevkit/rust-lightning");
 					return Err(DecodeError::InvalidValue);
 				}
 			}
