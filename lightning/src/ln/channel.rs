@@ -2283,6 +2283,7 @@ impl<Signer: WriteableEcdsaChannelSigner> Channel<Signer> {
 						held_update.update.update_id += 1;
 					}
 					if msg.is_some() {
+						debug_assert!(false, "If there is a pending blocked monitor we should have MonitorUpdateInProgress set");
 						let update = self.build_commitment_no_status_check(logger);
 						self.context.pending_monitor_updates.push(PendingChannelMonitorUpdate {
 							update, blocked: true,
