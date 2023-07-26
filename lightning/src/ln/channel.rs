@@ -603,6 +603,32 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 	(0, update, required),
 });
 
+/// The `ChannelPhase` enum describes the current phase in life of a lightning channel with each of
+/// its variants containing an appropriate channel struct.
+pub(super) enum ChannelPhase<Signer: ChannelSigner> {
+	UnfundedOutboundV1(OutboundV1Channel<Signer>),
+	UnfundedInboundV1(InboundV1Channel<Signer>),
+	Funded(Channel<Signer>),
+}
+
+impl<'a, Signer: ChannelSigner> ChannelPhase<Signer> {
+	pub fn context(&'a self) -> &'a ChannelContext<Signer> {
+		match self {
+			ChannelPhase::Funded(chan) => &chan.context,
+			ChannelPhase::UnfundedOutboundV1(chan) => &chan.context,
+			ChannelPhase::UnfundedInboundV1(chan) => &chan.context,
+		}
+	}
+
+	pub fn context_mut(&'a mut self) -> &'a mut ChannelContext<Signer> {
+		match self {
+			ChannelPhase::Funded(ref mut chan) => &mut chan.context,
+			ChannelPhase::UnfundedOutboundV1(ref mut chan) => &mut chan.context,
+			ChannelPhase::UnfundedInboundV1(ref mut chan) => &mut chan.context,
+		}
+	}
+}
+
 /// Contains all state common to unfunded inbound/outbound channels.
 pub(super) struct UnfundedChannelContext {
 	/// A counter tracking how many ticks have elapsed since this unfunded channel was
