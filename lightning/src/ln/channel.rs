@@ -612,7 +612,7 @@ pub(super) enum ChannelPhase<Signer: ChannelSigner> {
 }
 
 impl<'a, Signer: ChannelSigner> ChannelPhase<Signer> {
-	pub fn context(&'a self) -> &'a ChannelContext<Signer> {
+	pub fn chan_context(&'a self) -> &'a ChannelContext<Signer> {
 		match self {
 			ChannelPhase::Funded(chan) => &chan.context,
 			ChannelPhase::UnfundedOutboundV1(chan) => &chan.context,
@@ -620,7 +620,7 @@ impl<'a, Signer: ChannelSigner> ChannelPhase<Signer> {
 		}
 	}
 
-	pub fn context_mut(&'a mut self) -> &'a mut ChannelContext<Signer> {
+	pub fn chan_context_mut(&'a mut self) -> &'a mut ChannelContext<Signer> {
 		match self {
 			ChannelPhase::Funded(ref mut chan) => &mut chan.context,
 			ChannelPhase::UnfundedOutboundV1(ref mut chan) => &mut chan.context,
