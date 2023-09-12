@@ -1851,6 +1851,7 @@ mod tests {
 				channel_features: ChannelFeatures::empty(),
 				fee_msat: 0,
 				cltv_expiry_delta: 0,
+				maybe_announced_channel: true,
 			}], blinded_tail: None }],
 			route_params: Some(route_params.clone()),
 		};
@@ -2151,6 +2152,7 @@ mod tests {
 								channel_features: ChannelFeatures::empty(),
 								fee_msat: invoice.amount_msats(),
 								cltv_expiry_delta: 0,
+								maybe_announced_channel: true,
 							}
 						],
 						blinded_tail: None,
