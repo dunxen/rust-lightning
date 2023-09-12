@@ -20,7 +20,7 @@ use bitcoin::hash_types::{Txid, BlockHash};
 use bitcoin::secp256k1::constants::PUBLIC_KEY_SIZE;
 use bitcoin::secp256k1::{PublicKey,SecretKey};
 use bitcoin::secp256k1::{Secp256k1,ecdsa::Signature};
-use bitcoin::secp256k1;
+use bitcoin::{secp256k1, TxOut};
 
 use crate::ln::{ChannelId, PaymentPreimage, PaymentHash};
 use crate::ln::features::{ChannelTypeFeatures, InitFeatures};
@@ -2063,6 +2063,34 @@ fn commit_tx_fee_msat(feerate_per_kw: u32, num_htlcs: usize, channel_type_featur
 	// Note that we need to divide before multiplying to round properly,
 	// since the lowest denomination of bitcoin on-chain is the satoshi.
 	(commitment_tx_base_weight(channel_type_features) + num_htlcs as u64 * COMMITMENT_TX_WEIGHT_PER_HTLC) * feerate_per_kw as u64 / 1000 * 1000
+}
+
+/// Used when providing UTXOs to contribute to an outbound or inbound dual-funded channel.
+/// It will be included in an interactively constructed funding transaction which must then
+/// be signed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DualFundingUtxo {
+	/// The outpoint which is spendable.
+	pub outpoint: OutPoint,
+	/// The output which is referenced by the given outpoint.
+	pub output: TxOut,
+}
+
+/// Context for dual-funded channels.
+pub(super) struct DualFundingChannelContext {
+	/// The amount in satoshis we will be contributing to the channel.
+	pub our_funding_satoshis: u64,
+	/// The UTXOs we will be adding in interactive transaction construction.
+	pub our_funding_inputs: Vec<DualFundingUtxo>,
+	/// Flag indicating that we require our counterparty to use confirmed inputs for the construction
+	/// of the funding transaction.
+	pub we_require_confirmed_inputs: bool,
+	/// Flag indicating that our counterparty requires us to use confirmed inputs for the construction
+	/// of the funding transaction.
+	pub counterparty_requires_confirmed_inputs: bool,
+	/// The funding transaction locktime suggested by the initiator. If set by us, it is always set
+	/// to the current block height to align incentives against fee-sniping.
+	pub funding_tx_locktime: u32,
 }
 
 // Holder designates channel data owned for the benefit of the user client.
