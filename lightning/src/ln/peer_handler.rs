@@ -325,46 +325,57 @@ impl ChannelMessageHandler for ErroringMessageHandler {
 		None
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_open_channel_v2(&self, their_node_id: &PublicKey, msg: &msgs::OpenChannelV2) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.common_fields.temporary_channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_accept_channel_v2(&self, their_node_id: &PublicKey, msg: &msgs::AcceptChannelV2) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.common_fields.temporary_channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_add_input(&self, their_node_id: &PublicKey, msg: &msgs::TxAddInput) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_add_output(&self, their_node_id: &PublicKey, msg: &msgs::TxAddOutput) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_remove_input(&self, their_node_id: &PublicKey, msg: &msgs::TxRemoveInput) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_remove_output(&self, their_node_id: &PublicKey, msg: &msgs::TxRemoveOutput) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_complete(&self, their_node_id: &PublicKey, msg: &msgs::TxComplete) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_signatures(&self, their_node_id: &PublicKey, msg: &msgs::TxSignatures) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_init_rbf(&self, their_node_id: &PublicKey, msg: &msgs::TxInitRbf) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_ack_rbf(&self, their_node_id: &PublicKey, msg: &msgs::TxAckRbf) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
 
+	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_abort(&self, their_node_id: &PublicKey, msg: &msgs::TxAbort) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
@@ -1767,12 +1778,14 @@ impl<Descriptor: SocketDescriptor, CM: Deref, RM: Deref, OM: Deref, L: Deref, CM
 			wire::Message::OpenChannel(msg) => {
 				self.message_handler.chan_handler.handle_open_channel(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::OpenChannelV2(msg) => {
 				self.message_handler.chan_handler.handle_open_channel_v2(&their_node_id, &msg);
 			},
 			wire::Message::AcceptChannel(msg) => {
 				self.message_handler.chan_handler.handle_accept_channel(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::AcceptChannelV2(msg) => {
 				self.message_handler.chan_handler.handle_accept_channel_v2(&their_node_id, &msg);
 			},
@@ -1807,30 +1820,39 @@ impl<Descriptor: SocketDescriptor, CM: Deref, RM: Deref, OM: Deref, L: Deref, CM
 			}
 
 			// Interactive transaction construction messages:
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::TxAddInput(msg) => {
 				self.message_handler.chan_handler.handle_tx_add_input(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::TxAddOutput(msg) => {
 				self.message_handler.chan_handler.handle_tx_add_output(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::TxRemoveInput(msg) => {
 				self.message_handler.chan_handler.handle_tx_remove_input(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::TxRemoveOutput(msg) => {
 				self.message_handler.chan_handler.handle_tx_remove_output(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::TxComplete(msg) => {
 				self.message_handler.chan_handler.handle_tx_complete(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::TxSignatures(msg) => {
 				self.message_handler.chan_handler.handle_tx_signatures(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::TxInitRbf(msg) => {
 				self.message_handler.chan_handler.handle_tx_init_rbf(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::TxAckRbf(msg) => {
 				self.message_handler.chan_handler.handle_tx_ack_rbf(&their_node_id, &msg);
 			},
+			#[cfg(any(dual_funding, splicing))]
 			wire::Message::TxAbort(msg) => {
 				self.message_handler.chan_handler.handle_tx_abort(&their_node_id, &msg);
 			}
