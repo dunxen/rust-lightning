@@ -2104,12 +2104,6 @@ pub(super) struct DualFundingChannelContext {
 	pub our_funding_satoshis: u64,
 	/// The UTXOs we will be adding in interactive transaction construction.
 	pub our_funding_inputs: Vec<DualFundingUtxo>,
-	/// Flag indicating that we require our counterparty to use confirmed inputs for the construction
-	/// of the funding transaction.
-	pub we_require_confirmed_inputs: bool,
-	/// Flag indicating that our counterparty requires us to use confirmed inputs for the construction
-	/// of the funding transaction.
-	pub counterparty_requires_confirmed_inputs: bool,
 	/// The funding transaction locktime suggested by the initiator. If set by us, it is always set
 	/// to the current block height to align incentives against fee-sniping.
 	pub funding_tx_locktime: u32,
@@ -6695,7 +6689,7 @@ impl<SP: Deref> OutboundV2Channel<SP> where SP::Target: SignerProvider {
 		fee_estimator: &LowerBoundedFeeEstimator<F>, entropy_source: &ES, signer_provider: &SP,
 		counterparty_node_id: PublicKey, their_features: &InitFeatures, funding_satoshis: u64,
 		funding_inputs: Vec<DualFundingUtxo>, user_id: u128, config: &UserConfig,
-		current_chain_height: u32, outbound_scid_alias: u64, require_confirmed_inputs: bool,
+		current_chain_height: u32, outbound_scid_alias: u64,
 		funding_conf_target: Option<ConfirmationTarget>,
 	) -> Result<OutboundV2Channel<SP>, APIError>
 	where ES::Target: EntropySource,
@@ -6891,8 +6885,6 @@ impl<SP: Deref> OutboundV2Channel<SP> where SP::Target: SignerProvider {
 			dual_funding_context: DualFundingChannelContext {
 				our_funding_satoshis: funding_satoshis,
 				our_funding_inputs: funding_inputs,
-				we_require_confirmed_inputs: require_confirmed_inputs,
-				counterparty_requires_confirmed_inputs: false,
 				funding_tx_locktime,
 			}
 		})
@@ -6940,7 +6932,7 @@ impl<SP: Deref> OutboundV2Channel<SP> where SP::Target: SignerProvider {
 			}),
 			channel_type: Some(self.context.channel_type.clone()),
 			locktime: self.dual_funding_context.funding_tx_locktime,
-			require_confirmed_inputs: if self.dual_funding_context.we_require_confirmed_inputs { Some(()) } else { None },
+			require_confirmed_inputs: None,
 		}
 	}
 }
@@ -6955,13 +6947,12 @@ pub(super) struct InboundV2Channel<SP: Deref> where SP::Target: SignerProvider {
 impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 	/// Creates a new dual-funded channel from a remote side's request for one.
 	/// Assumes chain_hash has already been checked and corresponds with what we expect!
-	pub fn new_from_req<ES: Deref, F: Deref, L: Deref>(
+	pub fn new<ES: Deref, F: Deref, L: Deref>(
 		fee_estimator: &LowerBoundedFeeEstimator<F>, entropy_source: &ES, signer_provider: &SP,
 		counterparty_node_id: PublicKey, our_supported_features: &ChannelTypeFeatures,
 		their_features: &InitFeatures, msg: &msgs::OpenChannelV2, funding_satoshis: u64,
 		funding_inputs:Vec<DualFundingUtxo>, user_id: u128,
-		config: &UserConfig, current_chain_height: u32, logger: &L, outbound_scid_alias: u64,
-		require_confirmed_inputs: bool,
+		config: &UserConfig, current_chain_height: u32, logger: &L,
 	) -> Result<InboundV2Channel<SP>, ChannelError>
 		where ES::Target: EntropySource,
 			  F::Target: FeeEstimator,
@@ -7283,7 +7274,7 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 				sent_message_awaiting_response: None,
 
 				latest_inbound_scid_alias: None,
-				outbound_scid_alias,
+				outbound_scid_alias: 0,
 
 				channel_pending_event_emitted: false,
 				channel_ready_event_emitted: false,
@@ -7300,8 +7291,6 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 			dual_funding_context: DualFundingChannelContext {
 				our_funding_satoshis: funding_satoshis,
 				our_funding_inputs: funding_inputs,
-				we_require_confirmed_inputs: require_confirmed_inputs,
-				counterparty_requires_confirmed_inputs: msg.require_confirmed_inputs.is_some(),
 				funding_tx_locktime: msg.locktime,
 			}
 		};
@@ -7360,7 +7349,7 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 				None => Builder::new().into_script(),
 			}),
 			channel_type: Some(self.context.channel_type.clone()),
-			require_confirmed_inputs: if self.dual_funding_context.we_require_confirmed_inputs { Some(()) } else { None },
+			require_confirmed_inputs: None,
 		}
 	}
 
