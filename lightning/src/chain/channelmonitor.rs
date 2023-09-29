@@ -635,12 +635,18 @@ pub enum Balance {
 		/// [`Balance::MaybeTimeoutClaimableHTLC`] with their
 		/// [`Balance::MaybeTimeoutClaimableHTLC::outbound_payment`] flag set, as well as any dust
 		/// HTLCs which would otherwise be represented the same.
+		///
+		/// This value will not be included in `amount_satoshis` and any representable (quotient
+		/// when divided by 1000 without the remainder) value will go toward fees 
 		outbound_payment_htlc_rounded_msat: u64,
 		/// The amount of millisatoshis which has been burned to fees from HTLCs which are outbound
 		/// from us and are related to a forwarded HTLC. This is the sum of the millisatoshis part
 		/// of all HTLCs which are otherwise represented by [`Balance::MaybeTimeoutClaimableHTLC`]
 		/// with their [`Balance::MaybeTimeoutClaimableHTLC::outbound_payment`] flag *not* set, as
 		/// well as any dust HTLCs which would otherwise be represented the same.
+		///
+		/// This value will not be included in `amount_satoshis` and any representable (quotient
+		/// when divided by 1000 without the remainder) value will go toward fees 
 		outbound_forwarded_htlc_rounded_msat: u64,
 		/// The amount of millisatoshis which has been burned to fees from HTLCs which are inbound
 		/// to us and for which we know the preimage. This is the sum of the millisatoshis part of
@@ -648,12 +654,18 @@ pub enum Balance {
 		/// close, but who's current value is included in
 		/// [`Balance::ClaimableOnChannelClose::amount_satoshis`], as well as any dust HTLCs which
 		/// would otherwise be represented the same.
+		///
+		/// This value will not be included in `amount_satoshis` and any representable (quotient
+		/// when divided by 1000 without the remainder) value will go toward fees 
 		inbound_claiming_htlc_rounded_msat: u64,
 		/// The amount of millisatoshis which has been burned to fees from HTLCs which are inbound
 		/// to us and for which we do not know the preimage. This is the sum of the millisatoshis
 		/// part of all HTLCs which would be represented by [`Balance::MaybePreimageClaimableHTLC`]
 		/// on channel close, as well as any dust HTLCs which would otherwise be represented the
 		/// same.
+		///
+		/// This value will not be included in `amount_satoshis` and any representable (quotient
+		/// when divided by 1000 without the remainder) value will go toward fees 
 		inbound_htlc_rounded_msat: u64,
 	},
 	/// The channel has been closed, and the given balance is ours but awaiting confirmations until
@@ -2391,12 +2403,13 @@ impl<Signer: EcdsaChannelSigner> ChannelMonitor<Signer> {
 					}
 				}
 			}
+			let tx_fee_satoshis = chan_utils::commit_tx_fee_sat(
+				us.current_holder_commitment_tx.feerate_per_kw, nondust_htlc_count,
+				us.onchain_tx_handler.channel_type_features());
 			res.push(Balance::ClaimableOnChannelClose {
 				amount_satoshis: us.current_holder_commitment_tx.to_self_value_sat + claimable_inbound_htlc_value_sat,
 				transaction_fee_satoshis: if us.holder_pays_commitment_tx_fee.unwrap_or(true) {
-					chan_utils::commit_tx_fee_sat(
-						us.current_holder_commitment_tx.feerate_per_kw, nondust_htlc_count,
-						us.onchain_tx_handler.channel_type_features())
+					tx_fee_satoshis
 				} else { 0 },
 				outbound_payment_htlc_rounded_msat,
 				outbound_forwarded_htlc_rounded_msat,
