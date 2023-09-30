@@ -956,6 +956,33 @@ impl From<std::net::SocketAddr> for SocketAddress {
 		}
 }
 
+#[cfg(feature = "std")]
+impl std::net::ToSocketAddrs for SocketAddress {
+	type Iter = std::option::IntoIter<std::net::SocketAddr>;
+
+	fn to_socket_addrs(&self) -> std::io::Result<Self::Iter> {
+		match self {
+			SocketAddress::TcpIpV4 { addr, port } => {
+				let ip_addr = std::net::Ipv4Addr::from(*addr);
+				(ip_addr, *port).to_socket_addrs()
+			}
+			SocketAddress::TcpIpV6 { addr, port } => {
+				let ip_addr = std::net::Ipv6Addr::from(*addr);
+				(ip_addr, *port).to_socket_addrs()
+			}
+			SocketAddress::Hostname { ref hostname, port } => {
+				Ok((hostname.as_str(), *port).to_socket_addrs()?.next().into_iter())
+			}
+			SocketAddress::OnionV2(..) => {
+				Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+			}
+			SocketAddress::OnionV3 { .. } => {
+				Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+			}
+		}
+	}
+}
+
 fn parse_onion_address(host: &str, port: u16) -> Result<SocketAddress, SocketAddressParseError> {
 	if host.ends_with(".onion") {
 		let domain = &host[..host.len() - ".onion".len()];
@@ -2671,7 +2698,7 @@ mod tests {
 	use crate::chain::transaction::OutPoint;
 
 	#[cfg(feature = "std")]
-	use std::net::{Ipv4Addr, Ipv6Addr};
+	use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 	use crate::ln::msgs::SocketAddressParseError;
 
 	#[test]
@@ -4099,5 +4126,28 @@ mod tests {
 		assert!("b32.example.onion:invalid-port".parse::<SocketAddress>().is_err());
 		assert!("invalid-address".parse::<SocketAddress>().is_err());
 		assert!(SocketAddress::from_str("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion.onion:1234").is_err());
+	}
+
+	#[test]
+	#[cfg(feature = "std")]
+	fn test_socket_address_to_socket_addrs() {
+		assert_eq!(SocketAddress::TcpIpV4 {addr:[0u8; 4], port: 1337,}.to_socket_addrs().unwrap().next().unwrap(),
+				   SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(0,0,0,0),
+											   1337)));
+		assert_eq!(SocketAddress::TcpIpV6 {addr:[0u8; 16], port: 1337,}.to_socket_addrs().unwrap().next().unwrap(),
+				   SocketAddr::V6(std::net::SocketAddrV6::new(std::net::Ipv6Addr::from([0u8; 16]),
+											   1337, 0, 0)));
+		assert_eq!(SocketAddress::Hostname { hostname: Hostname::try_from("0.0.0.0".to_string()).unwrap(), port: 0
+					}.to_socket_addrs().unwrap().next().unwrap(),
+				   std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+					   std::net::Ipv4Addr::from([0u8; 4]),0)));
+		assert!(SocketAddress::OnionV2([0u8; 12]).to_socket_addrs().is_err());
+		assert!(SocketAddress::OnionV3{
+			ed25519_pubkey: [37, 24, 75, 5, 25, 73, 117, 194, 139, 102, 182, 107, 4, 105, 247, 246, 85,
+				111, 177, 172, 49, 137, 167, 155, 64, 221, 163, 47, 31, 33, 71, 3],
+			checksum: 48326,
+			version: 121,
+			port: 1234
+		}.to_socket_addrs().is_err());
 	}
 }
