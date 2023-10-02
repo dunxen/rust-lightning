@@ -974,10 +974,10 @@ impl std::net::ToSocketAddrs for SocketAddress {
 				Ok((hostname.as_str(), *port).to_socket_addrs()?.next().into_iter())
 			}
 			SocketAddress::OnionV2(..) => {
-				Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+				Err(std::io::Error::from(std::io::ErrorKind::Other))
 			}
 			SocketAddress::OnionV3 { .. } => {
-				Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+				Err(std::io::Error::from(std::io::ErrorKind::Other))
 			}
 		}
 	}
@@ -2698,7 +2698,7 @@ mod tests {
 	use crate::chain::transaction::OutPoint;
 
 	#[cfg(feature = "std")]
-	use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+	use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
 	use crate::ln::msgs::SocketAddressParseError;
 
 	#[test]
@@ -4132,15 +4132,15 @@ mod tests {
 	#[cfg(feature = "std")]
 	fn test_socket_address_to_socket_addrs() {
 		assert_eq!(SocketAddress::TcpIpV4 {addr:[0u8; 4], port: 1337,}.to_socket_addrs().unwrap().next().unwrap(),
-				   SocketAddr::V4(std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(0,0,0,0),
+				   SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0,0,0,0),
 											   1337)));
 		assert_eq!(SocketAddress::TcpIpV6 {addr:[0u8; 16], port: 1337,}.to_socket_addrs().unwrap().next().unwrap(),
-				   SocketAddr::V6(std::net::SocketAddrV6::new(std::net::Ipv6Addr::from([0u8; 16]),
+				   SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from([0u8; 16]),
 											   1337, 0, 0)));
 		assert_eq!(SocketAddress::Hostname { hostname: Hostname::try_from("0.0.0.0".to_string()).unwrap(), port: 0
 					}.to_socket_addrs().unwrap().next().unwrap(),
-				   std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
-					   std::net::Ipv4Addr::from([0u8; 4]),0)));
+				   SocketAddr::V4(SocketAddrV4::new(
+					   Ipv4Addr::from([0u8; 4]),0)));
 		assert!(SocketAddress::OnionV2([0u8; 12]).to_socket_addrs().is_err());
 		assert!(SocketAddress::OnionV3{
 			ed25519_pubkey: [37, 24, 75, 5, 25, 73, 117, 194, 139, 102, 182, 107, 4, 105, 247, 246, 85,
