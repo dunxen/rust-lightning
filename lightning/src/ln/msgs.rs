@@ -44,6 +44,7 @@ use core::fmt;
 use core::fmt::Debug;
 use core::ops::Deref;
 use core::str::FromStr;
+use std::net::SocketAddr;
 use crate::io::{self, Cursor, Read};
 use crate::io_extras::read_to_end;
 
@@ -958,26 +959,31 @@ impl From<std::net::SocketAddr> for SocketAddress {
 
 #[cfg(feature = "std")]
 impl std::net::ToSocketAddrs for SocketAddress {
-	type Iter = std::option::IntoIter<std::net::SocketAddr>;
+	type Iter = std::vec::IntoIter<std::net::SocketAddr>;
 
 	fn to_socket_addrs(&self) -> std::io::Result<Self::Iter> {
 		match self {
 			SocketAddress::TcpIpV4 { addr, port } => {
 				let ip_addr = std::net::Ipv4Addr::from(*addr);
-				(ip_addr, *port).to_socket_addrs()
+				let socket_addr = SocketAddr::new(ip_addr.into(), *port);
+				Ok(vec![socket_addr].into_iter())
 			}
 			SocketAddress::TcpIpV6 { addr, port } => {
 				let ip_addr = std::net::Ipv6Addr::from(*addr);
-				(ip_addr, *port).to_socket_addrs()
+				let socket_addr = SocketAddr::new(ip_addr.into(), *port);
+				Ok(vec![socket_addr].into_iter())
 			}
 			SocketAddress::Hostname { ref hostname, port } => {
-				Ok((hostname.as_str(), *port).to_socket_addrs()?.next().into_iter())
+				let socket_addr: Vec<SocketAddr> = (hostname.as_str(), *port).to_socket_addrs()?.collect();
+				Ok(socket_addr.into_iter())
 			}
 			SocketAddress::OnionV2(..) => {
-				Err(std::io::Error::from(std::io::ErrorKind::Other))
+				Err(std::io::Error::new(std::io::ErrorKind::Other, "Resolution of these \
+				addresses is currently unsupported."))
 			}
 			SocketAddress::OnionV3 { .. } => {
-				Err(std::io::Error::from(std::io::ErrorKind::Other))
+				Err(std::io::Error::new(std::io::ErrorKind::Other, "Resolution of these \
+				addresses is currently unsupported."))
 			}
 		}
 	}
