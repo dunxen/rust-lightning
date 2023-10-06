@@ -26,6 +26,8 @@ use bitcoin::secp256k1;
 
 use crate::ln::types::{ChannelId, PaymentPreimage, PaymentHash};
 use crate::ln::features::{ChannelTypeFeatures, InitFeatures};
+#[cfg(any(dual_funding, splicing))]
+use crate::ln::interactivetxs::InteractiveTxConstructor;
 use crate::ln::msgs;
 use crate::ln::msgs::DecodeError;
 use crate::ln::script::{self, ShutdownScript};
@@ -3601,6 +3603,9 @@ pub(super) struct Channel<SP: Deref> where SP::Target: SignerProvider {
 	pub context: ChannelContext<SP>,
 	#[cfg(any(dual_funding, splicing))]
 	pub dual_funding_channel_context: Option<DualFundingChannelContext>,
+	/// The current interactive transaction construction session under negotiation.
+	#[cfg(any(dual_funding, splicing))]
+	interactive_tx_constructor: Option<InteractiveTxConstructor>,
 }
 
 #[cfg(any(test, fuzzing))]
@@ -7796,6 +7801,8 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 			context: self.context,
 			#[cfg(any(dual_funding, splicing))]
 			dual_funding_channel_context: None,
+			#[cfg(any(dual_funding, splicing))]
+			interactive_tx_constructor: None,
 		};
 
 		let need_channel_ready = channel.check_get_channel_ready(0).is_some();
@@ -7904,7 +7911,7 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 				msg.push_msat,
 				msg.common_fields.clone(),
 			)?,
-			unfunded_context: UnfundedChannelContext { unfunded_channel_age_ticks: 0 }
+			unfunded_context: UnfundedChannelContext { unfunded_channel_age_ticks: 0 },
 		};
 		Ok(chan)
 	}
@@ -8086,6 +8093,8 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 			context: self.context,
 			#[cfg(any(dual_funding, splicing))]
 			dual_funding_channel_context: None,
+			#[cfg(any(dual_funding, splicing))]
+			interactive_tx_constructor: None,
 		};
 		let need_channel_ready = channel.check_get_channel_ready(0).is_some();
 		channel.monitor_updating_paused(false, false, need_channel_ready, Vec::new(), Vec::new(), Vec::new());
@@ -8099,8 +8108,9 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 pub(super) struct OutboundV2Channel<SP: Deref> where SP::Target: SignerProvider {
 	pub context: ChannelContext<SP>,
 	pub unfunded_context: UnfundedChannelContext,
-	#[cfg(any(dual_funding, splicing))]
 	pub dual_funding_context: DualFundingChannelContext,
+	/// The current interactive transaction construction session under negotiation.
+	interactive_tx_constructor: Option<InteractiveTxConstructor>,
 }
 
 #[cfg(any(dual_funding, splicing))]
@@ -8151,7 +8161,9 @@ impl<SP: Deref> OutboundV2Channel<SP> where SP::Target: SignerProvider {
 				their_funding_satoshis: 0,
 				funding_tx_locktime,
 				funding_feerate_sat_per_1000_weight,
-			}
+			},
+			#[cfg(any(dual_funding, splicing))]
+			interactive_tx_constructor: None,
 		};
 		Ok(chan)
 	}
@@ -8224,6 +8236,8 @@ pub(super) struct InboundV2Channel<SP: Deref> where SP::Target: SignerProvider {
 	pub context: ChannelContext<SP>,
 	pub unfunded_context: UnfundedChannelContext,
 	pub dual_funding_context: DualFundingChannelContext,
+	/// The current interactive transaction construction session under negotiation.
+	interactive_tx_constructor: Option<InteractiveTxConstructor>,
 }
 
 #[cfg(any(dual_funding, splicing))]
@@ -8296,7 +8310,8 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 				their_funding_satoshis: msg.common_fields.funding_satoshis,
 				funding_tx_locktime: msg.locktime,
 				funding_feerate_sat_per_1000_weight: msg.funding_feerate_sat_per_1000_weight,
-			}
+			},
+			interactive_tx_constructor: None,
 		};
 
 		Ok(chan)
@@ -9395,6 +9410,8 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 			},
 			#[cfg(any(dual_funding, splicing))]
 			dual_funding_channel_context: None,
+			#[cfg(any(dual_funding, splicing))]
+			interactive_tx_constructor: None,
 		})
 	}
 }
