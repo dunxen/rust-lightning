@@ -324,7 +324,10 @@ where C::Target: chain::Filter,
 				if self.update_monitor_with_chain_data(header, best_height, txdata, &process, funding_outpoint, &monitor_state).is_err() {
 					// Take the monitors lock for writing so that we poison it and any future
 					// operations going forward fail immediately.
+<<<<<<< HEAD
 					core::mem::drop(monitor_state);
+=======
+>>>>>>> origin/impl-ToSocketAddrs-for-Hostname
 					core::mem::drop(monitor_lock);
 					let _poison = self.monitors.write().unwrap();
 					log_error!(self.logger, "{}", err_str);
@@ -767,7 +770,11 @@ where C::Target: chain::Filter,
 			Some(monitor_state) => {
 				let monitor = &monitor_state.monitor;
 				log_trace!(self.logger, "Updating ChannelMonitor for channel {}", log_funding_info!(monitor));
+<<<<<<< HEAD
 				let update_res = monitor.update_monitor(update, &self.broadcaster, &*self.fee_estimator, &self.logger);
+=======
+				let update_res = monitor.update_monitor(update, &self.broadcaster, &self.fee_estimator, &self.logger);
+>>>>>>> origin/impl-ToSocketAddrs-for-Hostname
 
 				let update_id = MonitorUpdateId::from_monitor_update(update);
 				let mut pending_monitor_updates = monitor_state.pending_monitor_updates.lock().unwrap();

@@ -39,6 +39,7 @@ use crate::onion_message;
 use crate::sign::{NodeSigner, Recipient};
 
 use crate::prelude::*;
+#[cfg(feature = "std")]
 use core::convert::TryFrom;
 use core::fmt;
 use core::fmt::Debug;
@@ -989,7 +990,10 @@ impl std::net::ToSocketAddrs for SocketAddress {
 	}
 }
 
-fn parse_onion_address(host: &str, port: u16) -> Result<SocketAddress, SocketAddressParseError> {
+/// Parses an OnionV3 host and port into a [`SocketAddress::OnionV3`].
+///
+/// The host part must end with ".onion".
+pub fn parse_onion_address(host: &str, port: u16) -> Result<SocketAddress, SocketAddressParseError> {
 	if host.ends_with(".onion") {
 		let domain = &host[..host.len() - ".onion".len()];
 		if domain.len() != 56 {

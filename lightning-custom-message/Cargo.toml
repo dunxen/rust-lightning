@@ -1,6 +1,10 @@
 [package]
 name = "lightning-custom-message"
+<<<<<<< HEAD
 version = "0.0.117-rc1"
+=======
+version = "0.0.117"
+>>>>>>> origin/impl-ToSocketAddrs-for-Hostname
 authors = ["Jeffrey Czyz"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/lightningdevkit/rust-lightning"
@@ -15,4 +19,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 bitcoin = "0.29.0"
+<<<<<<< HEAD
 lightning = { version = "0.0.117-rc1", path = "../lightning" }
+=======
+lightning = { version = "0.0.117", path = "../lightning" }
+>>>>>>> origin/impl-ToSocketAddrs-for-Hostname

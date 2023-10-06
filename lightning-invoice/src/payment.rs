@@ -9,7 +9,12 @@
 
 //! Convenient utilities for paying Lightning invoices.
 
+<<<<<<< HEAD
 use crate::{Bolt11Invoice, Vec};
+=======
+use crate::Bolt11Invoice;
+use crate::prelude::*;
+>>>>>>> origin/impl-ToSocketAddrs-for-Hostname
 
 use bitcoin_hashes::Hash;
 
