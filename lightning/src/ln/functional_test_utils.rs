@@ -36,9 +36,11 @@ use crate::util::test_utils::{panicking, TestChainMonitor, TestScorer, TestKeysI
 use crate::util::ser::{ReadableArgs, Writeable};
 
 use bitcoin::blockdata::block::{Block, Header, Version};
-use bitcoin::blockdata::locktime::absolute::LockTime;
-use bitcoin::blockdata::transaction::{Transaction, TxIn, TxOut};
-use bitcoin::hash_types::{BlockHash, TxMerkleNode};
+use bitcoin::blockdata::locktime::absolute::{LOCK_TIME_THRESHOLD, LockTime};
+use bitcoin::blockdata::script::ScriptBuf;
+use bitcoin::blockdata::transaction::{Sequence, Transaction, TxIn, TxOut};
+use bitcoin::blockdata::witness::Witness;
+use bitcoin::hash_types::{BlockHash, TxMerkleNode, WPubkeyHash};
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash as _;
 use bitcoin::network::constants::Network;
@@ -1131,6 +1133,37 @@ pub fn create_coinbase_funding_transaction<'a, 'b, 'c>(node: &Node<'a, 'b, 'c>,
  -> (ChannelId, Transaction, OutPoint)
 {
 	internal_create_funding_transaction(node, expected_counterparty_node_id, expected_chan_value, expected_user_chan_id, true)
+}
+
+pub fn create_dual_funding_utxos_with_prev_txs<'a, 'b, 'c>(
+	node: &Node<'a, 'b, 'c>, utxo_values_in_satoshis: &[u64],
+) -> Vec<(TxIn, Transaction)> {
+	// Ensure we have unique transactions per node by using the locktime.
+	let tx = Transaction {
+		version: 2,
+		lock_time: LockTime::from_height(
+			u32::from_be_bytes(node.keys_manager.get_secure_random_bytes()[0..4].try_into().unwrap()) % LOCK_TIME_THRESHOLD
+		).unwrap(),
+		input: vec![],
+		output: utxo_values_in_satoshis.iter().map(|value| TxOut {
+			value: *value, script_pubkey: ScriptBuf::new_v0_p2wpkh(&WPubkeyHash::all_zeros()),
+		}).collect()
+	};
+
+	let mut result = vec![];
+	for i in 0..utxo_values_in_satoshis.len() {
+		result.push(
+			(TxIn {
+				previous_output: OutPoint {
+					txid: tx.txid(),
+					index: i as u16,
+				}.into_bitcoin_outpoint(),
+				script_sig: ScriptBuf::new(),
+				sequence: Sequence::ZERO,
+				witness: Witness::new(),
+			}, tx.clone()));
+	}
+	result
 }
 
 fn internal_create_funding_transaction<'a, 'b, 'c>(node: &Node<'a, 'b, 'c>,
