@@ -233,7 +233,7 @@ jobs:
 
   incremental-mutants:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: always() #github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v3
         with:
@@ -241,7 +241,7 @@ jobs:
       - name: Relative diff
         run: |
           git branch -av
-          git diff origin/${{ github.base_ref }}.. | tee git.diff
+          git diff upstream/main.. | tee git.diff
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         name: Install cargo-mutants using install-action
