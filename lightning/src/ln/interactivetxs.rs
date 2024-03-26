@@ -177,21 +177,25 @@ impl NegotiationContext {
 		} else {
 			return Err(AbortReason::PrevTxOutInvalid);
 		};
-		if self.inputs.iter().any(|(serial_id, _)| *serial_id == msg.serial_id) {
-			// The receiving node:
-			//  - MUST fail the negotiation if:
-			//    - the `serial_id` is already included in the transaction
-			return Err(AbortReason::DuplicateSerialId);
-		}
 		let prev_outpoint = OutPoint { txid, vout: msg.prevtx_out };
-		self.inputs.entry(msg.serial_id).or_insert_with(|| TxInputWithPrevOutput {
-			input: TxIn {
-				previous_output: prev_outpoint.clone(),
-				sequence: Sequence(msg.sequence),
-				..Default::default()
+		match self.inputs.entry(msg.serial_id) {
+			hash_map::Entry::Occupied(_) => {
+				// The receiving node:
+				//  - MUST fail the negotiation if:
+				//    - the `serial_id` is already included in the transaction
+				return Err(AbortReason::DuplicateSerialId);
 			},
-			prev_output: prev_out,
-		});
+			hash_map::Entry::Vacant(entry) => {
+				entry.insert(TxInputWithPrevOutput {
+					input: TxIn {
+						previous_output: prev_outpoint.clone(),
+						sequence: Sequence(msg.sequence),
+						..Default::default()
+					},
+					prev_output: prev_out,
+				});
+			},
+		}
 		self.prevtx_outpoints.insert(prev_outpoint);
 		Ok(())
 	}
@@ -263,15 +267,18 @@ impl NegotiationContext {
 			return Err(AbortReason::InvalidOutputScript);
 		}
 
-		if self.outputs.iter().any(|(serial_id, _)| *serial_id == msg.serial_id) {
-			// The receiving node:
-			//  - MUST fail the negotiation if:
-			//    - the `serial_id` is already included in the transaction
-			return Err(AbortReason::DuplicateSerialId);
-		}
-
 		let output = TxOut { value: msg.sats, script_pubkey: msg.script.clone() };
-		self.outputs.entry(msg.serial_id).or_insert(output);
+		match self.outputs.entry(msg.serial_id) {
+			hash_map::Entry::Occupied(_) => {
+				// The receiving node:
+				//  - MUST fail the negotiation if:
+				//    - the `serial_id` is already included in the transaction
+				return Err(AbortReason::DuplicateSerialId);
+			},
+			hash_map::Entry::Vacant(entry) => {
+				entry.insert(output);
+			},
+		};
 		Ok(())
 	}
 
