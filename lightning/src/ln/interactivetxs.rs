@@ -310,7 +310,10 @@ impl NegotiationContext {
 		};
 		let prev_output =
 			tx.output.get(msg.prevtx_out as usize).ok_or(AbortReason::PrevTxOutInvalid)?.clone();
-		self.prevtx_outpoints.insert(input.previous_output.clone());
+		if !self.prevtx_outpoints.insert(input.previous_output.clone()) {
+			// We have added an input that already exists
+			return Err(AbortReason::PrevTxOutInvalid);
+		}
 		self.inputs.insert(msg.serial_id, TxInputWithPrevOutput { input, prev_output });
 		Ok(())
 	}
