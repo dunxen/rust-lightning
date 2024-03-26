@@ -310,7 +310,10 @@ impl NegotiationContext {
 		};
 		let prev_output =
 			tx.output.get(msg.prevtx_out as usize).ok_or(AbortReason::PrevTxOutInvalid)?.clone();
-		self.prevtx_outpoints.insert(input.previous_output.clone());
+		if !self.prevtx_outpoints.insert(input.previous_output.clone()) {
+			// We have added an input that already exists
+			return Err(AbortReason::PrevTxOutInvalid);
+		}
 		self.inputs.insert(msg.serial_id, TxInputWithPrevOutput { input, prev_output });
 		Ok(())
 	}
@@ -1272,7 +1275,7 @@ mod tests {
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
 			outputs_b: vec![],
-			expect_error: Some((AbortReason::PrevTxOutInvalid, ErrorCulprit::NodeA)),
+			expect_error: Some((AbortReason::PrevTxOutInvalid, ErrorCulprit::NodeB)),
 		});
 		// Non-initiator uses same prevout as initiator.
 		let duplicate_input = TxIn {
@@ -1285,7 +1288,7 @@ mod tests {
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![(duplicate_input.clone(), tx.clone())],
 			outputs_b: vec![],
-			expect_error: Some((AbortReason::PrevTxOutInvalid, ErrorCulprit::NodeB)),
+			expect_error: Some((AbortReason::PrevTxOutInvalid, ErrorCulprit::NodeA)),
 		});
 		// Initiator sends too many TxAddInputs
 		do_test_interactive_tx_constructor(TestSession {
