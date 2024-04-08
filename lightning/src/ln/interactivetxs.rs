@@ -944,6 +944,7 @@ mod tests {
 	}
 
 	struct TestSession {
+		description: String,
 		inputs_a: Vec<(TxIn, TransactionU16LenLimited)>,
 		outputs_a: Vec<TxOut>,
 		inputs_b: Vec<(TxIn, TransactionU16LenLimited)>,
@@ -1035,7 +1036,12 @@ mod tests {
 							},
 							_ => ErrorCulprit::NodeA,
 						};
-						assert_eq!(Some((abort_reason, error_culprit)), session.expect_error);
+						assert_eq!(
+							Some((abort_reason, error_culprit)),
+							session.expect_error,
+							"Test: {}",
+							session.description
+						);
 						assert!(message_send_b.is_none());
 						return;
 					},
@@ -1054,7 +1060,12 @@ mod tests {
 							},
 							_ => ErrorCulprit::NodeB,
 						};
-						assert_eq!(Some((abort_reason, error_culprit)), session.expect_error);
+						assert_eq!(
+							Some((abort_reason, error_culprit)),
+							session.expect_error,
+							"Test: {}",
+							session.description
+						);
 						assert!(message_send_a.is_none());
 						return;
 					},
@@ -1175,6 +1186,7 @@ mod tests {
 	fn test_interactive_tx_constructor() {
 		// No contributions.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "No contributions".to_string(),
 			inputs_a: vec![],
 			outputs_a: vec![],
 			inputs_b: vec![],
@@ -1183,6 +1195,7 @@ mod tests {
 		});
 		// Single contribution, no initiator inputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Single contribution, no initiator inputs".to_string(),
 			inputs_a: vec![],
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
@@ -1191,6 +1204,7 @@ mod tests {
 		});
 		// Single contribution, no initiator outputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Single contribution, no initiator outputs".to_string(),
 			inputs_a: generate_inputs(&[1_000_000]),
 			outputs_a: vec![],
 			inputs_b: vec![],
@@ -1199,6 +1213,7 @@ mod tests {
 		});
 		// Single contribution, insufficient fees.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Single contribution, insufficient fees".to_string(),
 			inputs_a: generate_inputs(&[1_000_000]),
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
@@ -1207,6 +1222,8 @@ mod tests {
 		});
 		// Initiator contributes sufficient fees, but non-initiator does not.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator contributes sufficient fees, but non-initiator does not"
+				.to_string(),
 			inputs_a: generate_inputs(&[1_000_000]),
 			outputs_a: vec![],
 			inputs_b: generate_inputs(&[100_000]),
@@ -1215,6 +1232,7 @@ mod tests {
 		});
 		// Multi-input-output contributions from both sides.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Multi-input-output contributions from both sides".to_string(),
 			inputs_a: generate_inputs(&[1_000_000, 1_000_000]),
 			outputs_a: generate_outputs(&[1_000_000, 200_000]),
 			inputs_b: generate_inputs(&[1_000_000, 500_000]),
@@ -1244,6 +1262,7 @@ mod tests {
 			..Default::default()
 		};
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Prevout from initiator is not a witness program".to_string(),
 			inputs_a: vec![(non_segwit_input, non_segwit_output_tx)],
 			outputs_a: vec![],
 			inputs_b: vec![],
@@ -1258,6 +1277,7 @@ mod tests {
 			..Default::default()
 		};
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Invalid input sequence from initiator".to_string(),
 			inputs_a: vec![(invalid_sequence_input, tx.clone())],
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
@@ -1271,6 +1291,7 @@ mod tests {
 			..Default::default()
 		};
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Duplicate prevout from initiator".to_string(),
 			inputs_a: vec![(duplicate_input.clone(), tx.clone()), (duplicate_input, tx.clone())],
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
@@ -1284,6 +1305,7 @@ mod tests {
 			..Default::default()
 		};
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Non-initiator uses same prevout as initiator".to_string(),
 			inputs_a: vec![(duplicate_input.clone(), tx.clone())],
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![(duplicate_input.clone(), tx.clone())],
@@ -1292,6 +1314,7 @@ mod tests {
 		});
 		// Initiator sends too many TxAddInputs
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends too many TxAddInputs".to_string(),
 			inputs_a: generate_fixed_number_of_inputs(MAX_RECEIVED_TX_ADD_INPUT_COUNT + 1),
 			outputs_a: vec![],
 			inputs_b: vec![],
@@ -1302,6 +1325,7 @@ mod tests {
 		// entropy source, `DuplicateEntropySource` to simulate this.
 		do_test_interactive_tx_constructor_with_entropy_source(
 			TestSession {
+				description: "Attempt to queue up two inputs with duplicate serial ids".to_string(),
 				inputs_a: generate_fixed_number_of_inputs(2),
 				outputs_a: vec![],
 				inputs_b: vec![],
@@ -1312,6 +1336,7 @@ mod tests {
 		);
 		// Initiator sends too many TxAddOutputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends too many TxAddOutputs".to_string(),
 			inputs_a: vec![],
 			outputs_a: generate_fixed_number_of_outputs(MAX_RECEIVED_TX_ADD_OUTPUT_COUNT + 1),
 			inputs_b: vec![],
@@ -1320,6 +1345,7 @@ mod tests {
 		});
 		// Initiator sends an output below dust value.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends an output below dust value".to_string(),
 			inputs_a: vec![],
 			outputs_a: generate_outputs(&[1]),
 			inputs_b: vec![],
@@ -1328,6 +1354,7 @@ mod tests {
 		});
 		// Initiator sends an output above maximum sats allowed.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends an output above maximum sats allowed".to_string(),
 			inputs_a: vec![],
 			outputs_a: generate_outputs(&[TOTAL_BITCOIN_SUPPLY_SATOSHIS + 1]),
 			inputs_b: vec![],
@@ -1336,6 +1363,7 @@ mod tests {
 		});
 		// Initiator sends an output without a witness program.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends an output without a witness program".to_string(),
 			inputs_a: vec![],
 			outputs_a: vec![generate_non_witness_output(1_000_000)],
 			inputs_b: vec![],
@@ -1346,6 +1374,8 @@ mod tests {
 		// entropy source, `DuplicateEntropySource` to simulate this.
 		do_test_interactive_tx_constructor_with_entropy_source(
 			TestSession {
+				description: "Attempt to queue up two outputs with duplicate serial ids"
+					.to_string(),
 				inputs_a: vec![],
 				outputs_a: generate_fixed_number_of_outputs(2),
 				inputs_b: vec![],
@@ -1357,6 +1387,7 @@ mod tests {
 
 		// Peer contributed more output value than inputs
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Peer contributed more output value than inputs".to_string(),
 			inputs_a: generate_inputs(&[100_000]),
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
@@ -1366,6 +1397,7 @@ mod tests {
 
 		// Peer contributed more than allowed number of inputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Peer contributed more than allowed number of inputs".to_string(),
 			inputs_a: generate_fixed_number_of_inputs(MAX_INPUTS_OUTPUTS_COUNT as u16 + 1),
 			outputs_a: vec![],
 			inputs_b: vec![],
@@ -1377,6 +1409,7 @@ mod tests {
 		});
 		// Peer contributed more than allowed number of outputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Peer contributed more than allowed number of outputs".to_string(),
 			inputs_a: generate_inputs(&[TOTAL_BITCOIN_SUPPLY_SATOSHIS]),
 			outputs_a: generate_fixed_number_of_outputs(MAX_INPUTS_OUTPUTS_COUNT as u16 + 1),
 			inputs_b: vec![],
