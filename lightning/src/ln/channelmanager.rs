@@ -7993,6 +7993,7 @@ where
 					peer_state.pending_msg_events.push(msg_send_event);
 				}
 				if let Some(signing_session) = signing_session_opt {
+					let funding_txid = signing_session.unsigned_tx.txid();
 					let (channel_id, channel_phase) = chan_phase_entry.remove_entry();
 					let res = match channel_phase {
 						ChannelPhase::UnfundedOutboundV2(chan) => {
@@ -8014,7 +8015,7 @@ where
 						},
 					};
 					match res {
-						Ok((channel, commitment_signed, funding_ready_for_sig_event_opt)) => {
+						Ok((mut channel, commitment_signed, funding_ready_for_sig_event_opt)) => {
 							if let Some(funding_ready_for_sig_event) = funding_ready_for_sig_event_opt {
 								let mut pending_events = self.pending_events.lock().unwrap();
 								pending_events.push_back((funding_ready_for_sig_event, None));
@@ -8030,6 +8031,7 @@ where
 									update_fee: None,
 								},
 							});
+							channel.set_next_funding_txid(&funding_txid);
 							peer_state.channel_by_id.insert(channel_id.clone(), ChannelPhase::Funded(channel));
 						},
 						Err((channel_phase, _channel_error)) => {
@@ -8065,6 +8067,7 @@ where
 				match channel_phase {
 					ChannelPhase::Funded(chan) => {
 						let (tx_signatures_opt, funding_tx_opt) = try_chan_phase_entry!(self, chan.tx_signatures(&msg), chan_phase_entry);
+						chan.clear_next_funding_txid();
 						if let Some(tx_signatures) = tx_signatures_opt {
 							peer_state.pending_msg_events.push(events::MessageSendEvent::SendTxSignatures {
 								node_id: *counterparty_node_id,
