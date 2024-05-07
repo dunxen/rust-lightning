@@ -7224,7 +7224,8 @@ where
 										}
 										Ok(ChannelPhase::UnfundedInboundV2(channel))
 									},
-									Err(_) => {
+									Err(a) => {
+										dbg!(a);
 										Err(MsgHandleErrInternal::from_chan_no_close(ChannelError::Close("V2 channel rejected due to sender error".into()), *temporary_channel_id))
 									}
 								}
@@ -8054,7 +8055,8 @@ where
 							channel.set_next_funding_txid(&funding_txid);
 							peer_state.channel_by_id.insert(channel_id.clone(), ChannelPhase::Funded(channel));
 						},
-						Err((channel_phase, _)) => {
+						Err((channel_phase, err)) => {
+							dbg!(err);
 							peer_state.channel_by_id.insert(channel_id, channel_phase);
 							return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("{}", counterparty_node_id), msg.channel_id))
 						},
@@ -14572,7 +14574,7 @@ mod tests {
 		let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
 
 		// Create a funding input for the new channel along with its previous transaction.
-		let funding_inputs = vec![create_dual_funding_utxo_with_prev_tx(&nodes[0], 100_000)];
+		let funding_inputs = vec![create_dual_funding_utxo_with_prev_tx(&nodes[0], 100_000, 1, 0)];
 		let funding_satoshis = 50_000;
 
 		// nodes[0] creates a dual-funded channel as initiator.
@@ -14656,6 +14658,180 @@ mod tests {
 			},
 			_ => panic!("Unexpected event"),
 		};
+
+		// Handle the initial commitment_signed exchange. Order is not important here.
+		nodes[1].node.handle_commitment_signed(&nodes[0].node.get_our_node_id(), &msg_commitment_signed_from_0);
+		nodes[0].node.handle_commitment_signed(&nodes[1].node.get_our_node_id(), &msg_commitment_signed_from_1);
+		check_added_monitors(&nodes[0], 1);
+		check_added_monitors(&nodes[1], 1);
+
+		// The initiator is the only party that contributed any inputs so they should definitely be the one to send tx_signatures
+		// only after receiving tx_signatures from the non-initiator in this case.
+		let msg_events = nodes[0].node.get_and_clear_pending_msg_events();
+		assert!(msg_events.is_empty());
+		let tx_signatures_from_1 = get_event_msg!(nodes[1], MessageSendEvent::SendTxSignatures, nodes[0].node.get_our_node_id());
+
+		nodes[0].node.handle_tx_signatures(&nodes[1].node.get_our_node_id(), &tx_signatures_from_1);
+		let events_0 = nodes[0].node.get_and_clear_pending_events();
+		assert_eq!(events_0.len(), 1);
+		match events_0[0] {
+			Event::ChannelPending{ ref counterparty_node_id, .. } => {
+				assert_eq!(*counterparty_node_id, nodes[1].node.get_our_node_id());
+			},
+			_ => panic!("Unexpected event"),
+		}
+		let tx_signatures_from_0 = get_event_msg!(nodes[0], MessageSendEvent::SendTxSignatures, nodes[1].node.get_our_node_id());
+		nodes[1].node.handle_tx_signatures(&nodes[0].node.get_our_node_id(), &tx_signatures_from_0);
+		let events_1 = nodes[1].node.get_and_clear_pending_events();
+		assert_eq!(events_1.len(), 1);
+		match events_1[0] {
+			Event::ChannelPending{ ref counterparty_node_id, .. } => {
+				assert_eq!(*counterparty_node_id, nodes[0].node.get_our_node_id());
+			},
+			_ => panic!("Unexpected event"),
+		}
+
+		let tx = {
+			let tx_0 = &nodes[0].tx_broadcaster.txn_broadcasted.lock().unwrap()[0];
+			let tx_1 = &nodes[1].tx_broadcaster.txn_broadcasted.lock().unwrap()[0];
+			assert_eq!(tx_0, tx_1);
+			tx_0.clone()
+		};
+
+		let (channel_ready, _) = create_chan_between_nodes_with_value_confirm(&nodes[0], &nodes[1], &tx);
+		let (announcement, nodes_0_update, nodes_1_update) = create_chan_between_nodes_with_value_b(&nodes[0], &nodes[1], &channel_ready);
+		update_nodes_with_chan_announce(&nodes, 0, 1, &announcement, &nodes_0_update, &nodes_1_update);
+	}
+
+	#[test]
+	#[cfg(dual_funding)]
+	fn test_v2_channel_establishment_both_parties_contribute() {
+		let mut acceptor_manual_accept_cfg = test_default_channel_config();
+		acceptor_manual_accept_cfg.manually_accept_inbound_channels = true;
+
+		let chanmon_cfgs = create_chanmon_cfgs(2);
+		let node_cfgs = create_node_cfgs(2, &chanmon_cfgs);
+		let node_chanmgrs = create_node_chanmgrs(2, &node_cfgs, &[None, Some(acceptor_manual_accept_cfg)]);
+		let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
+
+		// Create a funding input for the new channel along with its previous transaction.
+		let initiator_input_value = 100_000;
+		let initiator_funding_inputs = vec![create_dual_funding_utxo_with_prev_tx(&nodes[0], initiator_input_value, 2, 0)];
+		let initiator_funding_satoshis = 50_000;
+		let acceptor_input_value = 80_000;
+		let acceptor_funding_inputs = vec![create_dual_funding_utxo_with_prev_tx(&nodes[1], acceptor_input_value, 2, 1)];
+		let acceptor_funding_satoshis = 50_000;
+
+		// nodes[0] creates a dual-funded channel as initiator.
+		nodes[0].node.create_dual_funded_channel(
+			nodes[1].node.get_our_node_id(), initiator_funding_satoshis, initiator_funding_inputs,
+			Some(ConfirmationTarget::NonAnchorChannelFee), 42, None,
+		).unwrap();
+		let open_channel_v2_msg = get_event_msg!(nodes[0], MessageSendEvent::SendOpenChannelV2, nodes[1].node.get_our_node_id());
+
+		assert_eq!(nodes[0].node.list_channels().len(), 1);
+
+		nodes[1].node.handle_open_channel_v2(&nodes[0].node.get_our_node_id(), &open_channel_v2_msg);
+		if let Event::OpenChannelV2Request {
+			temporary_channel_id,
+			counterparty_node_id,
+			counterparty_funding_satoshis: _,
+			channel_type: _,
+		} = get_event!(nodes[1], Event::OpenChannelV2Request) {
+			nodes[1].node.accept_inbound_channel_with_contribution(&temporary_channel_id,
+				&counterparty_node_id, 0, acceptor_funding_satoshis, acceptor_funding_inputs).unwrap();
+		} else {
+			panic!("Unexpected event");
+		}
+
+		let accept_channel_v2_msg = get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannelV2, nodes[0].node.get_our_node_id());
+
+		nodes[0].node.handle_accept_channel_v2(&nodes[1].node.get_our_node_id(), &accept_channel_v2_msg);
+
+		// Node A sends an initial tx_add_input message
+		let a_tx_add_input_msg = get_event_msg!(&nodes[0], MessageSendEvent::SendTxAddInput, nodes[1].node.get_our_node_id());
+		let input_value = a_tx_add_input_msg.prevtx.as_transaction().output[a_tx_add_input_msg.prevtx_out as usize].value;
+		assert_eq!(input_value, initiator_input_value);
+
+		// Node B receives the message and responds with its tx_add_input message
+		nodes[1].node.handle_tx_add_input(&nodes[0].node.get_our_node_id(), &a_tx_add_input_msg);
+		let b_tx_add_input_msg = get_event_msg!(nodes[1], MessageSendEvent::SendTxAddInput, nodes[0].node.get_our_node_id());
+		let input_value = b_tx_add_input_msg.prevtx.as_transaction().output[b_tx_add_input_msg.prevtx_out as usize].value;
+		assert_eq!(input_value, acceptor_input_value);
+
+		// Node A receives the tx_add_input message from B
+		nodes[0].node.handle_tx_add_input(&nodes[1].node.get_our_node_id(), &b_tx_add_input_msg);
+
+		// We have two outputs being added by A: the P2WSH funding output, and its P2PKH change output
+		//      and one output being added by B: its P2PKH change output
+		let a_tx_add_output_msg = get_event_msg!(&nodes[0], MessageSendEvent::SendTxAddOutput, nodes[1].node.get_our_node_id());
+
+		nodes[1].node.handle_tx_add_output(&nodes[0].node.get_our_node_id(), &a_tx_add_output_msg);
+		let b_tx_add_output_msg = get_event_msg!(&nodes[1], MessageSendEvent::SendTxAddOutput, nodes[0].node.get_our_node_id());
+
+		nodes[0].node.handle_tx_add_output(&nodes[1].node.get_our_node_id(), &b_tx_add_output_msg);
+		let a_tx_add_output_msg = get_event_msg!(&nodes[0], MessageSendEvent::SendTxAddOutput, nodes[1].node.get_our_node_id());
+
+		nodes[1].node.handle_tx_add_output(&nodes[0].node.get_our_node_id(), &a_tx_add_output_msg);
+		let tx_complete_msg = get_event_msg!(nodes[1], MessageSendEvent::SendTxComplete, nodes[0].node.get_our_node_id());
+
+		nodes[0].node.handle_tx_complete(&nodes[1].node.get_our_node_id(), &tx_complete_msg);
+		let msg_events = nodes[0].node.get_and_clear_pending_msg_events();
+		assert_eq!(msg_events.len(), 2);
+		let tx_complete_msg = match msg_events[0] {
+			MessageSendEvent::SendTxComplete { ref node_id, ref msg } => {
+				assert_eq!(*node_id, nodes[1].node.get_our_node_id());
+				(*msg).clone()
+			},
+			_ => panic!("Unexpected event"),
+		};
+		let msg_commitment_signed_from_0 = match msg_events[1] {
+			MessageSendEvent::UpdateHTLCs { ref node_id, ref updates } => {
+				assert_eq!(*node_id, nodes[1].node.get_our_node_id());
+				updates.commitment_signed.clone()
+			},
+			_ => panic!("Unexpected event"),
+		};
+		if let Event::FundingTransactionReadyForSigning {
+			channel_id,
+			counterparty_node_id,
+			mut unsigned_transaction,
+			..
+		} = get_event!(nodes[0], Event::FundingTransactionReadyForSigning) {
+			assert_eq!(counterparty_node_id, nodes[1].node.get_our_node_id());
+
+			let mut witness = Witness::new();
+			witness.push(vec![0]);
+			unsigned_transaction.input[0].witness = witness;
+
+			nodes[0].node.funding_transaction_signed(&channel_id, &counterparty_node_id, unsigned_transaction).unwrap();
+		} else { panic!(); }
+
+		nodes[1].node.handle_tx_complete(&nodes[0].node.get_our_node_id(), &tx_complete_msg);
+		let msg_events = nodes[1].node.get_and_clear_pending_msg_events();
+		// First messsage is commitment_signed, second is tx_signatures (see below for more)
+		assert_eq!(msg_events.len(), 1);
+		let msg_commitment_signed_from_1 = match msg_events[0] {
+			MessageSendEvent::UpdateHTLCs { ref node_id, ref updates } => {
+				assert_eq!(*node_id, nodes[0].node.get_our_node_id());
+				updates.commitment_signed.clone()
+			},
+			_ => panic!("Unexpected event"),
+		};
+		if let Event::FundingTransactionReadyForSigning {
+			channel_id,
+			counterparty_node_id,
+			mut unsigned_transaction,
+			..
+		} = get_event!(nodes[1], Event::FundingTransactionReadyForSigning) {
+			assert_eq!(counterparty_node_id, nodes[0].node.get_our_node_id());
+
+			let mut witness = Witness::new();
+			witness.push(vec![0]);
+			unsigned_transaction.input[0].witness = witness;
+
+			nodes[1].node.funding_transaction_signed(&channel_id, &counterparty_node_id, unsigned_transaction).unwrap();
+		} else { panic!(); }
 
 		// Handle the initial commitment_signed exchange. Order is not important here.
 		nodes[1].node.handle_commitment_signed(&nodes[0].node.get_our_node_id(), &msg_commitment_signed_from_0);

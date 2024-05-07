@@ -736,7 +736,10 @@ macro_rules! get_event_msg {
 					assert_eq!(*node_id, $node_id);
 					(*msg).clone()
 				},
-				_ => panic!("Unexpected event"),
+				ref event => {
+					dbg!(event);
+					panic!("Unexpected event")
+				},
 			}
 		}
 	}
@@ -1136,18 +1139,19 @@ pub fn create_coinbase_funding_transaction<'a, 'b, 'c>(node: &Node<'a, 'b, 'c>,
 }
 
 pub fn create_dual_funding_utxo_with_prev_tx<'a, 'b, 'c>(
-	node: &Node<'a, 'b, 'c>, value_satoshis: u64,
+	node: &Node<'a, 'b, 'c>, value_satoshis: u64, prev_tx_output_count: u16, node_index: u16,
 ) -> (TxIn, Transaction) {
 	let chan_id = *node.network_chan_count.borrow();
 
 	let tx = Transaction { version: chan_id as i32, lock_time: LockTime::ZERO, input: vec![],
-		output: vec![TxOut {
+		output: (0..prev_tx_output_count).into_iter().map(|_| TxOut {
 			value: value_satoshis, script_pubkey: ScriptBuf::new_v0_p2wpkh(&WPubkeyHash::all_zeros()),
-		}]};
+		}).collect(),
+	};
 	let funding_input = TxIn {
 		previous_output: OutPoint {
 			txid: tx.txid(),
-			index: 0,
+			index: node_index,
 		}.into_bitcoin_outpoint(),
 		script_sig: ScriptBuf::new(),
 		sequence: Sequence::ZERO,
