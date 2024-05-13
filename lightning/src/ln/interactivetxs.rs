@@ -173,7 +173,8 @@ impl ConstructedTransaction {
 		outputs.sort_unstable_by_key(|output| output.serial_id);
 
 		let input: Vec<TxIn> = inputs.into_iter().map(|input| input.txin().clone()).collect();
-		let output: Vec<TxOut> = outputs.into_iter().map(|output| output.tx_out().clone()).collect();
+		let output: Vec<TxOut> =
+			outputs.into_iter().map(|output| output.tx_out().clone()).collect();
 
 		Transaction { version: Version::TWO, lock_time: self.lock_time, input, output }
 	}
@@ -234,8 +235,7 @@ fn is_serial_id_valid_for_counterparty(holder_is_initiator: bool, serial_id: &Se
 impl NegotiationContext {
 	fn new(
 		holder_is_initiator: bool, expected_shared_funding_output: (ScriptBuf, u64),
-		tx_locktime: AbsoluteLockTime,
-		feerate_sat_per_kw: u32,
+		tx_locktime: AbsoluteLockTime, feerate_sat_per_kw: u32,
 	) -> Self {
 		NegotiationContext {
 			holder_is_initiator,
@@ -460,9 +460,17 @@ impl NegotiationContext {
 		let output = if is_shared {
 			// this is a shared funding output
 			let shared_output = self.set_actual_new_funding_output(txout)?;
-			InteractiveTxOutput { serial_id: msg.serial_id, added_by: AddingRole::Remote, output: OutputOwned::Shared(shared_output) }
+			InteractiveTxOutput {
+				serial_id: msg.serial_id,
+				added_by: AddingRole::Remote,
+				output: OutputOwned::Shared(shared_output),
+			}
 		} else {
-			InteractiveTxOutput { serial_id: msg.serial_id, added_by: AddingRole::Remote, output: OutputOwned::Single(txout) }
+			InteractiveTxOutput {
+				serial_id: msg.serial_id,
+				added_by: AddingRole::Remote,
+				output: OutputOwned::Single(txout),
+			}
 		};
 		match self.outputs.entry(msg.serial_id) {
 			hash_map::Entry::Occupied(_) => {
@@ -507,7 +515,9 @@ impl NegotiationContext {
 		let vout = txin.previous_output.vout as usize;
 		let prev_output = tx.output.get(vout).ok_or(AbortReason::PrevTxOutInvalid)?.clone();
 		let input = InteractiveTxInput::Local(LocalOrRemoteInput {
-			serial_id: msg.serial_id, input: txin, prev_output,
+			serial_id: msg.serial_id,
+			input: txin,
+			prev_output,
 		});
 		self.inputs.insert(msg.serial_id, input);
 		Ok(())
@@ -519,9 +529,17 @@ impl NegotiationContext {
 		let output = if is_shared {
 			// this is a shared funding output
 			let shared_output = self.set_actual_new_funding_output(txout)?;
-			InteractiveTxOutput { serial_id: msg.serial_id, added_by: AddingRole::Local, output: OutputOwned::Shared(shared_output) }
+			InteractiveTxOutput {
+				serial_id: msg.serial_id,
+				added_by: AddingRole::Local,
+				output: OutputOwned::Shared(shared_output),
+			}
 		} else {
-			InteractiveTxOutput { serial_id: msg.serial_id, added_by: AddingRole::Local, output: OutputOwned::Single(txout) }
+			InteractiveTxOutput {
+				serial_id: msg.serial_id,
+				added_by: AddingRole::Local,
+				output: OutputOwned::Single(txout),
+			}
 		};
 		self.outputs.insert(msg.serial_id, output);
 		Ok(())
@@ -888,7 +906,12 @@ pub struct SharedOwnedOutput {
 
 impl SharedOwnedOutput {
 	fn new(tx_out: TxOut, local_owned: u64) -> SharedOwnedOutput {
-		debug_assert!(local_owned <= tx_out.value.to_sat(), "SharedOwnedOutput: Inconsistent local_owned value {}, larger than output value {}", local_owned, tx_out.value);
+		debug_assert!(
+			local_owned <= tx_out.value.to_sat(),
+			"SharedOwnedOutput: Inconsistent local_owned value {}, larger than output value {}",
+			local_owned,
+			tx_out.value
+		);
 		SharedOwnedOutput { tx_out, local_owned }
 	}
 
@@ -913,8 +936,7 @@ pub enum OutputOwned {
 impl OutputOwned {
 	fn tx_out(&self) -> &TxOut {
 		match self {
-			OutputOwned::Single(tx_out) |
-			OutputOwned::SharedControlFullyOwned(tx_out) => tx_out,
+			OutputOwned::Single(tx_out) | OutputOwned::SharedControlFullyOwned(tx_out) => tx_out,
 			OutputOwned::Shared(output) => &output.tx_out,
 		}
 	}
@@ -933,26 +955,24 @@ impl OutputOwned {
 
 	fn local_value(&self, local_role: AddingRole) -> u64 {
 		match self {
-			OutputOwned::Single(tx_out) |
-			OutputOwned::SharedControlFullyOwned(tx_out) => {
+			OutputOwned::Single(tx_out) | OutputOwned::SharedControlFullyOwned(tx_out) => {
 				match local_role {
 					AddingRole::Local => tx_out.value.to_sat(),
 					AddingRole::Remote => 0,
 				}
-			}
+			},
 			OutputOwned::Shared(output) => output.local_owned,
 		}
 	}
 
 	fn remote_value(&self, local_role: AddingRole) -> u64 {
 		match self {
-			OutputOwned::Single(tx_out) |
-			OutputOwned::SharedControlFullyOwned(tx_out) => {
+			OutputOwned::Single(tx_out) | OutputOwned::SharedControlFullyOwned(tx_out) => {
 				match local_role {
 					AddingRole::Local => 0,
 					AddingRole::Remote => tx_out.value.to_sat(),
 				}
-			}
+			},
 			OutputOwned::Shared(output) => output.remote_owned(),
 		}
 	}
@@ -966,15 +986,25 @@ pub struct InteractiveTxOutput {
 }
 
 impl InteractiveTxOutput {
-	fn tx_out(&self) -> &TxOut { self.output.tx_out() }
+	fn tx_out(&self) -> &TxOut {
+		self.output.tx_out()
+	}
 
-	fn value(&self) -> u64 { self.tx_out().value.to_sat() }
+	fn value(&self) -> u64 {
+		self.tx_out().value.to_sat()
+	}
 
-	fn local_value(&self) -> u64 { self.output.local_value(self.added_by) }
+	fn local_value(&self) -> u64 {
+		self.output.local_value(self.added_by)
+	}
 
-	fn remote_value(&self) -> u64 { self.output.remote_value(self.added_by) }
+	fn remote_value(&self) -> u64 {
+		self.output.remote_value(self.added_by)
+	}
 
-	fn script_pubkey(&self) -> &ScriptBuf { &self.output.tx_out().script_pubkey }
+	fn script_pubkey(&self) -> &ScriptBuf {
+		&self.output.tx_out().script_pubkey
+	}
 }
 
 impl InteractiveTxInput {
@@ -1092,17 +1122,19 @@ impl InteractiveTxConstructor {
 				OutputOwned::Single(_tx_out) => None,
 				OutputOwned::SharedControlFullyOwned(tx_out) => {
 					Some((tx_out.script_pubkey.clone(), tx_out.value.to_sat()))
-				}
+				},
 				OutputOwned::Shared(output) => {
 					// Sanity check
 					if output.local_owned > output.tx_out.value.to_sat() {
 						return Err(AbortReason::InvalidLowFundingOutputValue);
 					}
 					Some((output.tx_out.script_pubkey.clone(), output.local_owned))
-				}
+				},
 			};
 			if new_output.is_some() {
-				if expected_shared_funding_output.is_some() || expected_remote_shared_funding_output.is_some() {
+				if expected_shared_funding_output.is_some()
+					|| expected_remote_shared_funding_output.is_some()
+				{
 					// more than one local-added shared output or
 					// one local-added and one remote-expected shared output
 					return Err(AbortReason::DuplicateFundingOutput);
@@ -1281,8 +1313,9 @@ mod tests {
 	use core::ops::Deref;
 
 	use super::{
-		AddingRole, get_output_weight, OutputOwned, P2TR_INPUT_WEIGHT_LOWER_BOUND, P2WPKH_INPUT_WEIGHT_LOWER_BOUND,
-		P2WSH_INPUT_WEIGHT_LOWER_BOUND, SharedOwnedOutput, TX_COMMON_FIELDS_WEIGHT,
+		get_output_weight, AddingRole, OutputOwned, SharedOwnedOutput,
+		P2TR_INPUT_WEIGHT_LOWER_BOUND, P2WPKH_INPUT_WEIGHT_LOWER_BOUND,
+		P2WSH_INPUT_WEIGHT_LOWER_BOUND, TX_COMMON_FIELDS_WEIGHT,
 	};
 
 	const TEST_FEERATE_SATS_PER_KW: u32 = FEERATE_FLOOR_SATS_PER_KW * 10;
@@ -1362,38 +1395,55 @@ mod tests {
 		let tx_locktime = AbsoluteLockTime::from_height(1337).unwrap();
 
 		// funding output sanity check
-		let shared_outputs_by_a: Vec<_> = session.outputs_a.iter().filter(|o| o.is_shared()).collect();
+		let shared_outputs_by_a: Vec<_> =
+			session.outputs_a.iter().filter(|o| o.is_shared()).collect();
 		if shared_outputs_by_a.len() > 1 {
 			println!("Test warning: Expected at most one shared output. NodeA");
 		}
 		let shared_output_by_a = if shared_outputs_by_a.len() >= 1 {
 			Some(shared_outputs_by_a[0].value())
-		} else { None };
-		let shared_outputs_by_b: Vec<_> = session.outputs_b.iter().filter(|o| o.is_shared()).collect();
+		} else {
+			None
+		};
+		let shared_outputs_by_b: Vec<_> =
+			session.outputs_b.iter().filter(|o| o.is_shared()).collect();
 		if shared_outputs_by_b.len() > 1 {
 			println!("Test warning: Expected at most one shared output. NodeB");
 		}
 		let shared_output_by_b = if shared_outputs_by_b.len() >= 1 {
 			Some(shared_outputs_by_b[0].value())
-		} else { None };
-		if session.a_expected_remote_shared_output.is_some() || session.b_expected_remote_shared_output.is_some() {
-			let expected_by_a = if let Some(a_expected_remote_shared_output) = &session.a_expected_remote_shared_output {
+		} else {
+			None
+		};
+		if session.a_expected_remote_shared_output.is_some()
+			|| session.b_expected_remote_shared_output.is_some()
+		{
+			let expected_by_a = if let Some(a_expected_remote_shared_output) =
+				&session.a_expected_remote_shared_output
+			{
 				a_expected_remote_shared_output.1
 			} else {
 				if shared_outputs_by_a.len() >= 1 {
 					shared_outputs_by_a[0].local_value(AddingRole::Local)
-				} else { 0 }
+				} else {
+					0
+				}
 			};
-			let expected_by_b = if let Some(b_expected_remote_shared_output) = &session.b_expected_remote_shared_output {
+			let expected_by_b = if let Some(b_expected_remote_shared_output) =
+				&session.b_expected_remote_shared_output
+			{
 				b_expected_remote_shared_output.1
 			} else {
 				if shared_outputs_by_b.len() >= 1 {
 					shared_outputs_by_b[0].local_value(AddingRole::Local)
-				} else { 0 }
+				} else {
+					0
+				}
 			};
 
 			let expected_sum = expected_by_a + expected_by_b;
-			let actual_shared_output = shared_output_by_a.unwrap_or(shared_output_by_b.unwrap_or(0));
+			let actual_shared_output =
+				shared_output_by_a.unwrap_or(shared_output_by_b.unwrap_or(0));
 			if expected_sum != actual_shared_output {
 				println!("Test warning: Sum of expected shared output values does not match actual shared output value, {} {}   {} {}   {} {}", expected_sum, actual_shared_output, expected_by_a, expected_by_b, shared_output_by_a.unwrap_or(0), shared_output_by_b.unwrap_or(0));
 			}
@@ -1418,7 +1468,7 @@ mod tests {
 					session.description
 				);
 				return;
-			}
+			},
 		};
 		let (mut constructor_b, first_message_b) = match InteractiveTxConstructor::new(
 			entropy_source,
@@ -1439,7 +1489,7 @@ mod tests {
 					session.description
 				);
 				return;
-			}
+			},
 		};
 
 		let handle_message_send =
@@ -1548,9 +1598,7 @@ mod tests {
 	fn generate_txout(output: &TestOutput) -> TxOut {
 		let secp_ctx = Secp256k1::new();
 		let (value, script_pubkey) = match output {
-			TestOutput::P2WPKH(value) => {
-				(*value, generate_p2wpkh_script_pubkey())
-			},
+			TestOutput::P2WPKH(value) => (*value, generate_p2wpkh_script_pubkey()),
 			TestOutput::P2WSH(value) => (*value, generate_funding_script_pubkey()),
 			TestOutput::P2TR(value) => (
 				*value,
@@ -1630,7 +1678,10 @@ mod tests {
 
 	/// Generate a single P2WSH output with shared contribution that is the funding output
 	fn generate_shared_funding_output_one(value: u64, local_value: u64) -> OutputOwned {
-		OutputOwned::Shared(SharedOwnedOutput { tx_out: generate_txout(&TestOutput::P2WSH(value)), local_owned: local_value })
+		OutputOwned::Shared(SharedOwnedOutput {
+			tx_out: generate_txout(&TestOutput::P2WSH(value)),
+			local_owned: local_value,
+		})
 	}
 
 	/// Generate a single P2WSH output with shared contribution that is the funding output
@@ -1687,7 +1738,10 @@ mod tests {
 	}
 
 	fn generate_non_witness_output(value: u64) -> OutputOwned {
-		OutputOwned::Single(TxOut { value: Amount::from_sat(value), script_pubkey: generate_p2sh_script_pubkey() })
+		OutputOwned::Single(TxOut {
+			value: Amount::from_sat(value),
+			script_pubkey: generate_p2sh_script_pubkey(),
+		})
 	}
 
 	#[test]
