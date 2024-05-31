@@ -4923,6 +4923,16 @@ where
 		Ok(())
 	}
 
+	#[cfg(any(dual_funding, splicing))]
+	pub fn accept_fee_bump(
+		&self, channel_id: &ChannelId, counterparty_node_id: &PublicKey, user_channel_id: u128,
+		funding_satoshis: u64, funding_inputs: Vec<(TxIn, Transaction)>
+	) -> Result<(), APIError> {
+		let funding_inputs = Self::length_limit_holder_input_prev_txs(funding_inputs)?;
+		self.do_accept_inbound_channel(temporary_channel_id, counterparty_node_id, false, user_channel_id,
+			funding_satoshis, funding_inputs)
+	}
+
 	/// Atomically applies partial updates to the [`ChannelConfig`] of the given channels.
 	///
 	/// Once the updates are applied, each eligible channel (advertised with a known short channel
@@ -8122,10 +8132,38 @@ where
 	}
 
 	#[cfg(any(dual_funding, splicing))]
-	fn internal_tx_init_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxInitRbf) {
-		let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
-			"Dual-funded channels not supported".to_owned(),
-			 msg.channel_id.clone())), *counterparty_node_id);
+	fn internal_tx_init_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxInitRbf) -> Result<(), MsgHandleErrInternal> {
+		let per_peer_state = self.per_peer_state.read().unwrap();
+		let peer_state_mutex = per_peer_state.get(counterparty_node_id)
+			.ok_or_else(|| {
+				debug_assert!(false);
+				MsgHandleErrInternal::send_err_msg_no_close(
+					format!("Can't find a peer matching the passed counterparty node_id {}", counterparty_node_id),
+					msg.channel_id)
+			})?;
+		let mut peer_state_lock = peer_state_mutex.lock().unwrap();
+		let peer_state = &mut *peer_state_lock;
+		match peer_state.channel_by_id.entry(msg.channel_id) {
+			hash_map::Entry::Occupied(mut chan_phase_entry) => {
+				let channel_phase = chan_phase_entry.get_mut();
+				match channel_phase {
+					ChannelPhase::Funded(chan) => {
+						let tx_ack_rbf = try_chan_phase_entry!(self, chan.tx_init_rbf(&msg), chan_phase_entry);
+						peer_state.pending_msg_events.push(events::MessageSendEvent::SendTxAckRbf {
+							node_id: *counterparty_node_id,
+							msg: tx_ack_rbf,
+						});
+					},
+					_ => try_chan_phase_entry!(self, Err(ChannelError::Close(
+						"Got an unexpected tx_init_rbf message"
+						.into())), chan_phase_entry)
+				}
+				Ok(())
+			},
+			hash_map::Entry::Vacant(_) => {
+				Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}", counterparty_node_id), msg.channel_id))
+			}
+		}
 	}
 
 	#[cfg(any(dual_funding, splicing))]
@@ -11162,9 +11200,13 @@ where
 
 	#[cfg(any(dual_funding, splicing))]
 	fn handle_tx_init_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxInitRbf) {
-		let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
-			"Dual-funded channels not supported".to_owned(),
-			 msg.channel_id.clone())), *counterparty_node_id);
+		// Note that we never need to persist the updated ChannelManager for an inbound
+		// tx_init_rbf message - interactive transaction construction does not need to
+		// be persisted before any signatures are exchanged.
+		let _persistence_guard = PersistenceNotifierGuard::optionally_notify(self, || {
+			let _ = handle_error!(self, self.internal_tx_init_rbf(counterparty_node_id, msg), *counterparty_node_id);
+			NotifyOption::SkipPersistHandleEvents
+		});
 	}
 
 	#[cfg(any(dual_funding, splicing))]

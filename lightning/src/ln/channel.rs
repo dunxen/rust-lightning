@@ -4044,6 +4044,8 @@ pub(super) struct Channel<SP: Deref> where SP::Target: SignerProvider {
 	pub interactive_tx_constructor: Option<InteractiveTxConstructor>,
 	#[cfg(any(dual_funding, splicing))]
 	pub interactive_tx_signing_session: Option<InteractiveTxSigningSession>,
+	#[cfg(any(dual_funding, splicing))]
+	pub is_interactive_tx_initiator: bool,
 }
 
 #[cfg(any(test, fuzzing))]
@@ -5604,8 +5606,32 @@ impl<SP: Deref> Channel<SP> where
 	}
 
 	#[cfg(any(dual_funding, splicing))]
-	pub fn tx_init_rbf(&self, _msg: &msgs::TxInitRbf)-> Result<InteractiveTxMessageSend, ChannelError> {
-		todo!();
+	pub fn tx_init_rbf(&self, msg: &msgs::TxInitRbf)-> Result<msgs::TxAckRbf, ChannelError> {
+		// TODO(splicing): Check for splicing session.
+		let mut funding_output_contribution = None;
+		if let Some(ref context) = self.dual_funding_channel_context {
+			// We will only contribute if the bump in feerate is some reasonable amount, otherwise
+			// BOLT2 recommends not contributing anything instead of failing.
+			if msg.feerate_sat_per_1000_weight < context.funding_feerate_sat_per_1000_weight * 100 {
+				funding_output_contribution = Some(context.our_funding_satoshis as i64);
+			}
+		} else {
+			return Err(ChannelError::Warn("Unexpected tx_init_rbf: We are not waiting on an interactively funded tx to confirm".to_string()));
+		}
+		if self.interactive_tx_signing_session.is_some() {
+			return Err(ChannelError::Warn("Unexpected tx_init_rbf: There is already an interactive signing session in progress".to_string()));
+		}
+		if self.interactive_tx_constructor.is_some() {
+			return Err(ChannelError::Warn("Unexpected tx_init_rbf: There is already an interactive tx construction in progress".to_string()));
+		}
+		if self.is_interactive_tx_initiator {
+			return Err(ChannelError::Warn("Unexpected tx_init_rbf: We are the initiator, not you".to_string()));
+		}
+
+		Ok(msgs::TxAckRbf {
+			channel_id: self.context.channel_id,
+			funding_output_contribution,
+		})
 	}
 
 	#[cfg(any(dual_funding, splicing))]
@@ -8263,6 +8289,8 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 			interactive_tx_constructor: None,
 			#[cfg(any(dual_funding, splicing))]
 			interactive_tx_signing_session: None,
+			#[cfg(any(dual_funding, splicing))]
+			is_interactive_tx_initiator: false,
 		};
 
 		let need_channel_ready = channel.check_get_channel_ready(0).is_some();
@@ -8557,6 +8585,8 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 			interactive_tx_constructor: None,
 			#[cfg(any(dual_funding, splicing))]
 			interactive_tx_signing_session: None,
+			#[cfg(any(dual_funding, splicing))]
+			is_interactive_tx_initiator: false,
 		};
 		let need_channel_ready = channel.check_get_channel_ready(0).is_some();
 		channel.monitor_updating_paused(false, false, need_channel_ready, Vec::new(), Vec::new(), Vec::new());
@@ -8713,6 +8743,7 @@ impl<SP: Deref> OutboundV2Channel<SP> where SP::Target: SignerProvider {
 			dual_funding_channel_context: Some(self.dual_funding_context),
 			interactive_tx_constructor: self.interactive_tx_constructor,
 			interactive_tx_signing_session: Some(signing_session),
+			is_interactive_tx_initiator: true,
 		};
 
 		Ok((channel, commitment_signed, funding_ready_for_sig_event))
@@ -8920,6 +8951,7 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 			dual_funding_channel_context: Some(self.dual_funding_context),
 			interactive_tx_constructor: self.interactive_tx_constructor,
 			interactive_tx_signing_session: Some(signing_session),
+			is_interactive_tx_initiator: false,
 		};
 
 		Ok((channel, commitment_signed, funding_ready_for_sig_event))
@@ -10034,6 +10066,8 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 			interactive_tx_constructor: None,
 			#[cfg(any(dual_funding, splicing))]
 			interactive_tx_signing_session: None,
+			#[cfg(any(dual_funding, splicing))]
+			is_interactive_tx_initiator: false,
 		})
 	}
 }

@@ -1240,6 +1240,16 @@ pub enum Event {
 		/// [`ChannelManager::funding_transaction_signed`]: crate::ln::channelmanager::ChannelManager::funding_transaction_signed
 		unsigned_transaction: Transaction,
 	},
+	#[cfg(any(dual_funding, splicing))]
+	/// Indicates that a peer wants to bump the fee of an unconfirmed interactively constructed
+	/// dual-funding or splice transaction with us.
+	///
+	/// Includes the `tx_init_rbf` the peer sent to us with information about the requested fee bump.
+	///
+	/// To acknowledge the fee bump, call [`ChannelManager::accept_fee_bump`] and provide the relevant
+	/// arguments. This will initiate a new interactive transaction negotiation and upon completion,
+	/// the new transaction will need to be signed.
+	BumpInteractiveTransaction(msgs::TxInitRbf),
 }
 
 impl Writeable for Event {
@@ -1521,6 +1531,15 @@ impl Writeable for Event {
 				41u8.write(writer)?;
 				// We never write out FundingTransactionReadyForSigning events as, upon disconnection, peers
 				// drop any V2-established channels which have not yet exchanged the initial `commitment_signed`.
+				// We only exhange the initial `commitment_signed` after the client calls
+				// `ChannelManager::funding_transaction_signed` and ALWAYS before we send a `tx_signatures`
+			},
+			#[cfg(any(dual_funding, splicing))]
+			&Event::BumpInteractiveTransaction(_) => {
+				43u8.write(writer)?;
+				// We never write out BumpInteractiveTransaction events as, upon disconnection, peers
+				// drop any interactive transaction negotiations which have not yet exchanged the initial
+				// `commitment_signed`.
 				// We only exhange the initial `commitment_signed` after the client calls
 				// `ChannelManager::funding_transaction_signed` and ALWAYS before we send a `tx_signatures`
 			},
