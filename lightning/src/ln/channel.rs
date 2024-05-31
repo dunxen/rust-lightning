@@ -7460,6 +7460,10 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 		if !self.context.is_outbound() {
 			panic!("Tried to create outbound funding_created message on an inbound channel!");
 		}
+		// REMOVE ME - TRIGGER MUTANTS
+		if is_batch_funding {
+			println!("trigger mutants");
+		};
 		if !matches!(
 			self.context.channel_state, ChannelState::NegotiatingFunding(flags)
 			if flags == (NegotiatingFundingFlags::OUR_INIT_SENT | NegotiatingFundingFlags::THEIR_INIT_SENT)
