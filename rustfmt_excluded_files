@@ -1,6 +1,5 @@
 ./bench/benches/bench.rs
 ./lightning-background-processor/src/lib.rs
-./lightning-block-sync/src/http.rs
 ./lightning-block-sync/src/init.rs
 ./lightning-block-sync/src/lib.rs
 ./lightning-block-sync/src/poll.rs
