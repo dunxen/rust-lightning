@@ -273,8 +273,14 @@ impl_writeable_tlv_based!(ChannelCounterparty, {
 
 /// Details of a channel, as returned by [`ChannelManager::list_channels`] and [`ChannelManager::list_usable_channels`]
 ///
+/// Balances of a channel are available through [`ChainMonitor::get_claimable_balances`] and
+/// [`ChannelMonitor::get_claimable_balances`], calculated with respect to the corresponding on-chain
+/// transactions.
+///
 /// [`ChannelManager::list_channels`]: crate::ln::channelmanager::ChannelManager::list_channels
 /// [`ChannelManager::list_usable_channels`]: crate::ln::channelmanager::ChannelManager::list_usable_channels
+/// [`ChainMonitor::get_claimable_balances`]: crate::chain::chainmonitor::ChainMonitor::get_claimable_balances
+/// [`ChannelMonitor::get_claimable_balances`]: crate::chain::channelmonitor::ChannelMonitor::get_claimable_balances
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChannelDetails {
 	/// The channel's ID (prior to funding transaction generation, this is a random 32 bytes,
@@ -363,6 +369,10 @@ pub struct ChannelDetails {
 	/// This does not consider any on-chain fees.
 	///
 	/// See also [`ChannelDetails::outbound_capacity_msat`]
+	#[deprecated(
+		since = "0.0.124",
+		note = "use [`ChannelMonitor::get_claimable_balances`] instead"
+	)]
 	pub balance_msat: u64,
 	/// The available outbound capacity for sending HTLCs to the remote peer. This does not include
 	/// any pending HTLCs which are not yet fully resolved (and, thus, whose balance is not

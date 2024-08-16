@@ -80,6 +80,7 @@ pub struct ChannelValueStat {
 
 pub struct AvailableBalances {
 	/// The amount that would go to us if we close the channel, ignoring any on-chain fees.
+	#[deprecated(since = "0.0.124", note = "use [`ChannelMonitor::get_claimable_balances`] instead")]
 	pub balance_msat: u64,
 	/// Total amount available for our counterparty to send to us.
 	pub inbound_capacity_msat: u64,
