@@ -334,7 +334,8 @@ jobs:
                 -A clippy::unnecessary_to_owned \
                 -A clippy::unnecessary_unwrap \
                 -A clippy::unused_unit \
-                -A clippy::useless_conversion
+                -A clippy::useless_conversion \
+                -A clippy::manual_inspect # suggests Result::inspect_err, available for Rust >= 1.76.0
 
   rustfmt:
     runs-on: ubuntu-latest
