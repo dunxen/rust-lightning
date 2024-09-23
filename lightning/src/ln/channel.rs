@@ -9797,6 +9797,7 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 		let mut channel_pending_event_emitted = None;
 		let mut channel_ready_event_emitted = None;
 		let mut funding_tx_broadcast_safe_event_emitted = None;
+		let mut next_funding_txid = None;
 
 		let mut user_id_high_opt: Option<u64> = None;
 		let mut channel_keys_id: Option<[u8; 32]> = None;
@@ -9857,6 +9858,7 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 			(49, local_initiated_shutdown, option),
 			(51, is_manual_broadcast, option),
 			(53, funding_tx_broadcast_safe_event_emitted, option),
+			(55, next_funding_txid, option) // Added in 0.0.125
 		});
 
 		let (channel_keys_id, holder_signer) = if let Some(channel_keys_id) = channel_keys_id {
@@ -10119,7 +10121,7 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 				// If we've sent `commtiment_signed` for an interactive transaction construction,
 				// but have not received `tx_signatures` we MUST set `next_funding_txid` to the
 				// txid of that interactive transaction, else we MUST NOT set it.
-				next_funding_txid: None,
+				next_funding_txid,
 			},
 			dual_funding_channel_context: None,
 			interactive_tx_constructor: None,
