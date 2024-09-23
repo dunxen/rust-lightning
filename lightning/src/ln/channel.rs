@@ -1560,7 +1560,7 @@ pub(super) trait InteractivelyFunded<SP: Deref> where SP::Target: SignerProvider
 		})
 	}
 
-	fn internal_funding_tx_constructed<L: Deref>(
+	fn funding_tx_constructed<L: Deref>(
 		&mut self, signing_session: &mut InteractiveTxSigningSession, logger: &L
 	) -> Result<(msgs::CommitmentSigned, Option<Event>), ChannelError>
 	where
@@ -3788,6 +3788,33 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider {
 				self.cur_counterparty_commitment_transaction_number != INITIAL_COMMITMENT_NUMBER ||
 				self.holder_commitment_point.transaction_number() != INITIAL_COMMITMENT_NUMBER {
 			panic!("Should not have advanced channel commitment tx numbers prior to funding_created");
+		}
+	}
+
+	fn get_initial_counterparty_commitment_signature<L: Deref>(
+		&self, logger: &L
+	) -> Result<Signature, ChannelError>
+	where
+		SP::Target: SignerProvider,
+		L::Target: Logger
+	{
+		let counterparty_keys = self.build_remote_transaction_keys();
+		let counterparty_initial_commitment_tx = self.build_commitment_transaction(
+			self.cur_counterparty_commitment_transaction_number, &counterparty_keys, false, false, logger).tx;
+		match self.holder_signer {
+			// TODO (taproot|arik): move match into calling method for Taproot
+			ChannelSignerType::Ecdsa(ref ecdsa) => {
+				ecdsa.sign_counterparty_commitment(&counterparty_initial_commitment_tx, Vec::new(), Vec::new(), &self.secp_ctx)
+					.map(|(signature, _)| signature)
+					.map_err(|_| ChannelError::Close(
+						(
+							"Failed to get signatures for new commitment_signed".to_owned(),
+							ClosureReason::HolderForceClosed { broadcasted_latest_txn: Some(false) },
+						)))
+			},
+			// TODO (taproot|arik)
+			#[cfg(taproot)]
+			_ => todo!(),
 		}
 	}
 }
@@ -8727,22 +8754,6 @@ impl<SP: Deref> OutboundV2Channel<SP> where SP::Target: SignerProvider {
 		}
 	}
 
-	pub fn funding_tx_constructed<L: Deref>(
-		&mut self, signing_session: &mut InteractiveTxSigningSession, logger: &L
-	) -> Result<(msgs::CommitmentSigned, Option<Event>), ChannelError>
-	where
-		L::Target: Logger
-	{
-		let (commitment_signed, funding_ready_for_sig_event) = match self.internal_funding_tx_constructed(
-			signing_session, logger,
-		) {
-			Ok(res) => res,
-			Err(err) => return Err(err),
-		};
-
-		Ok((commitment_signed, funding_ready_for_sig_event))
-	}
-
 	pub fn into_channel(self, signing_session: InteractiveTxSigningSession) -> Result<Channel<SP>, ChannelError>{
 		let channel = Channel {
 			context: self.context,
@@ -8946,22 +8957,6 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 		self.generate_accept_channel_v2_message()
 	}
 
-	pub fn funding_tx_constructed<L: Deref>(
-		&mut self, signing_session: &mut InteractiveTxSigningSession, logger: &L
-	) -> Result<(msgs::CommitmentSigned, Option<Event>), ChannelError>
-	where
-		L::Target: Logger
-	{
-		let (commitment_signed, funding_ready_for_sig_event) = match self.internal_funding_tx_constructed(
-			signing_session, logger,
-		) {
-			Ok(res) => res,
-			Err(err) => return Err(err),
-		};
-
-		Ok((commitment_signed, funding_ready_for_sig_event))
-	}
-
 	pub fn into_channel(self, signing_session: InteractiveTxSigningSession) -> Result<Channel<SP>, ChannelError>{
 		let channel = Channel {
 			context: self.context,
@@ -8999,32 +8994,6 @@ fn get_initial_channel_type(config: &UserConfig, their_features: &InitFeatures) 
 	ret
 }
 
-fn get_initial_counterparty_commitment_signature<SP:Deref, L: Deref>(
-	context: &mut ChannelContext<SP>, logger: &L
-) -> Result<Signature, ChannelError>
-where
-	SP::Target: SignerProvider,
-	L::Target: Logger
-{
-	let counterparty_keys = context.build_remote_transaction_keys();
-	let counterparty_initial_commitment_tx = context.build_commitment_transaction(
-		context.cur_counterparty_commitment_transaction_number, &counterparty_keys, false, false, logger).tx;
-	match context.holder_signer {
-		// TODO (taproot|arik): move match into calling method for Taproot
-		ChannelSignerType::Ecdsa(ref ecdsa) => {
-			Ok(ecdsa.sign_counterparty_commitment(&counterparty_initial_commitment_tx, Vec::new(), Vec::new(), &context.secp_ctx)
-				.map_err(|_| ChannelError::Close(
-					(
-						"Failed to get signatures for new commitment_signed".to_owned(),
-						ClosureReason::HolderForceClosed { broadcasted_latest_txn: Some(false) },
-					)))?.0)
-		},
-		// TODO (taproot|arik)
-		#[cfg(taproot)]
-		_ => todo!(),
-	}
-}
-
 fn get_initial_commitment_signed<SP:Deref, L: Deref>(
 	context: &mut ChannelContext<SP>, transaction: &ConstructedTransaction, logger: &L
 ) -> Result<msgs::CommitmentSigned, ChannelError>
@@ -9052,7 +9021,7 @@ where
 	context.channel_transaction_parameters.funding_outpoint = Some(funding_txo);
 	context.holder_signer.as_mut().provide_channel_parameters(&context.channel_transaction_parameters);
 
-	let signature = match get_initial_counterparty_commitment_signature(context, logger) {
+	let signature = match context.get_initial_counterparty_commitment_signature(logger) {
 		Ok(res) => res,
 		Err(e) => {
 			log_error!(logger, "Got bad signatures: {:?}!", e);
