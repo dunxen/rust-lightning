@@ -8063,7 +8063,7 @@ where
 					peer_state.pending_msg_events.push(msg_send_event);
 				};
 				if let Some(mut signing_session) = signing_session_opt {
-					match chan_phase_entry.get_mut() {
+					let (commitment_signed, funding_ready_for_sig_event_opt) = match chan_phase_entry.get_mut() {
 						ChannelPhase::UnfundedOutboundV2(chan) => {
 							chan.funding_tx_constructed(&mut signing_session, &self.logger)
 						},
@@ -8073,23 +8073,18 @@ where
 						_ => Err(ChannelError::Warn(
 							"Got a tx_complete message with no interactive transaction construction expected or in-progress"
 							.into())),
-					}.and_then(|(commitment_signed, funding_ready_for_sig_event_opt)| {
-							let (channel_id, channel_phase) = chan_phase_entry.remove_entry();
-							match channel_phase {
-								ChannelPhase::UnfundedOutboundV2(chan) => {
-									chan.into_channel(signing_session)
-								},
-								ChannelPhase::UnfundedInboundV2(chan) => {
-									chan.into_channel(signing_session)
-								},
+					}.map_err(|err| MsgHandleErrInternal::send_err_msg_no_close(format!("{}", err), msg.channel_id))?;
+					let (channel_id, channel_phase) = chan_phase_entry.remove_entry();
+							let channel = match channel_phase {
+								ChannelPhase::UnfundedOutboundV2(chan) => chan.into_channel(signing_session),
+								ChannelPhase::UnfundedInboundV2(chan) => chan.into_channel(signing_session),
 								_ => {
 									debug_assert!(false); // It cannot be another variant as we are in the `Ok` branch of the above match.
 									Err(ChannelError::Warn(
 										"Got a tx_complete message with no interactive transaction construction expected or in-progress"
 											.into()))
-								}
-							}.map(|channel| (channel_id, channel, funding_ready_for_sig_event_opt, commitment_signed))
-						}).map(|(channel_id, channel, funding_ready_for_sig_event_opt, commitment_signed)| {
+								},
+							}.map_err(|err| MsgHandleErrInternal::send_err_msg_no_close(format!("{}", err), msg.channel_id))?;
 							peer_state.channel_by_id.insert(channel_id, ChannelPhase::Funded(channel));
 							if let Some(funding_ready_for_sig_event) = funding_ready_for_sig_event_opt {
 								let mut pending_events = self.pending_events.lock().unwrap();
@@ -8106,11 +8101,8 @@ where
 									update_fee: None,
 								},
 							});
-						}).map_err(|err| MsgHandleErrInternal::send_err_msg_no_close(format!("{}", err), msg.channel_id))
-				} else {
-					// We're not in a signing session yet so we don't need to do anything else.
-					Ok(())
-				}
+						}
+						Ok(())
 			},
 			hash_map::Entry::Vacant(_) => {
 				Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}", counterparty_node_id), msg.channel_id))
