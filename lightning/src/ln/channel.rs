@@ -3983,6 +3983,20 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider {
 			_ => todo!(),
 		}
 	}
+
+	#[cfg(test)]
+	pub fn get_initial_counterparty_commitment_signature_for_test<L: Deref>(
+		&mut self, logger: &L, channel_transaction_parameters: ChannelTransactionParameters,
+		counterparty_cur_commitment_point_override: PublicKey,
+	) -> Result<Signature, ChannelError>
+	where
+		SP::Target: SignerProvider,
+		L::Target: Logger
+	{
+		self.counterparty_cur_commitment_point = Some(counterparty_cur_commitment_point_override);
+		self.channel_transaction_parameters = channel_transaction_parameters;
+		self.get_initial_counterparty_commitment_signature(logger)
+	}
 }
 
 // Internal utility functions for channels
@@ -8860,7 +8874,7 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 				is_initiator: false,
 			    inputs_to_contribute: channel.dual_funding_context.our_funding_inputs.clone(),
 			    outputs_to_contribute: Vec::new(),
-			    expected_remote_shared_funding_output: Some((channel.context().get_funding_redeemscript(), channel.context().channel_value_satoshis)),
+			    expected_remote_shared_funding_output: Some((channel.context().get_funding_redeemscript().to_p2wsh(), channel.context().channel_value_satoshis)),
 			}
 		) {
 			Ok(tx_constructor) => {
