@@ -1541,66 +1541,64 @@ trait InitialRemoteCommitmentReceiver<SP: Deref> where SP::Target: SignerProvide
 				panic!("unexpected error type from check_counterparty_commitment_signature {:?}", e);
 			}
 		};
-		let counterparty_keys = self.context().build_remote_transaction_keys();
-		let counterparty_initial_commitment_tx = self.context().build_commitment_transaction(self.context().cur_counterparty_commitment_transaction_number, &counterparty_keys, false, false, logger).tx;
+		let context = self.context_mut();
+		let counterparty_keys = context.build_remote_transaction_keys();
+		let counterparty_initial_commitment_tx = context.build_commitment_transaction(context.cur_counterparty_commitment_transaction_number, &counterparty_keys, false, false, logger).tx;
 		let counterparty_trusted_tx = counterparty_initial_commitment_tx.trust();
 		let counterparty_initial_bitcoin_tx = counterparty_trusted_tx.built_transaction();
 
 		log_trace!(logger, "Initial counterparty tx for channel {} is: txid {} tx {}",
-			&self.context().channel_id(), counterparty_initial_bitcoin_tx.txid, encode::serialize_hex(&counterparty_initial_bitcoin_tx.transaction));
+			&context.channel_id(), counterparty_initial_bitcoin_tx.txid, encode::serialize_hex(&counterparty_initial_bitcoin_tx.transaction));
 
 		let holder_commitment_tx = HolderCommitmentTransaction::new(
 			initial_commitment_tx,
 			counterparty_signature,
 			Vec::new(),
-			&self.context().get_holder_pubkeys().funding_pubkey,
-			self.context().counterparty_funding_pubkey()
+			&context.get_holder_pubkeys().funding_pubkey,
+			context.counterparty_funding_pubkey()
 		);
 
-		if self.context().holder_signer.as_ref().validate_holder_commitment(&holder_commitment_tx, Vec::new()).is_err() {
+		if context.holder_signer.as_ref().validate_holder_commitment(&holder_commitment_tx, Vec::new()).is_err() {
 			return Err(ChannelError::close("Failed to validate our commitment".to_owned()));
 		}
 
 		// Now that we're past error-generating stuff, update our local state:
 
-		self.context_mut().channel_id = channel_id;
+		context.channel_id = channel_id;
 
-		assert!(!self.context().channel_state.is_monitor_update_in_progress()); // We have not had any monitor(s) yet to fail update!
-		if self.context().is_batch_funding() {
-			self.context_mut().channel_state = ChannelState::AwaitingChannelReady(AwaitingChannelReadyFlags::WAITING_FOR_BATCH);
+		assert!(!context.channel_state.is_monitor_update_in_progress()); // We have not had any monitor(s) yet to fail update!
+		if context.is_batch_funding() {
+			context.channel_state = ChannelState::AwaitingChannelReady(AwaitingChannelReadyFlags::WAITING_FOR_BATCH);
 		} else {
-			self.context_mut().channel_state = ChannelState::AwaitingChannelReady(AwaitingChannelReadyFlags::new());
+			context.channel_state = ChannelState::AwaitingChannelReady(AwaitingChannelReadyFlags::new());
 		}
-		{
-			let context = self.context_mut();
-			if context.holder_commitment_point.advance(&context.holder_signer, &context.secp_ctx, logger).is_err() {
-				// We only fail to advance our commitment point/number if we're currently
-				// waiting for our signer to unblock and provide a commitment point.
-				// We cannot send accept_channel/open_channel before this has occurred, so if we
-				// err here by the time we receive funding_created/funding_signed, something has gone wrong.
-				debug_assert!(false, "We should be ready to advance our commitment point by the time we receive {}", self.received_msg());
-				return Err(ChannelError::close("Failed to advance holder commitment point".to_owned()));
-			}
+		if context.holder_commitment_point.advance(&context.holder_signer, &context.secp_ctx, logger).is_err() {
+			// We only fail to advance our commitment point/number if we're currently
+			// waiting for our signer to unblock and provide a commitment point.
+			// We cannot send accept_channel/open_channel before this has occurred, so if we
+			// err here by the time we receive funding_created/funding_signed, something has gone wrong.
+			debug_assert!(false, "We should be ready to advance our commitment point by the time we receive {}", self.received_msg());
+			return Err(ChannelError::close("Failed to advance holder commitment point".to_owned()));
 		}
 
-		let funding_redeemscript = self.context().get_funding_redeemscript();
-		let funding_txo = self.context().get_funding_txo().unwrap();
+		let funding_redeemscript = context.get_funding_redeemscript();
+		let funding_txo = context.get_funding_txo().unwrap();
 		let funding_txo_script = funding_redeemscript.to_p2wsh();
-		let obscure_factor = get_commitment_transaction_number_obscure_factor(&self.context().get_holder_pubkeys().payment_point, &self.context().get_counterparty_pubkeys().payment_point, self.context().is_outbound());
-		let shutdown_script = self.context().shutdown_scriptpubkey.clone().map(|script| script.into_inner());
-		let mut monitor_signer = signer_provider.derive_channel_signer(self.context().channel_value_satoshis, self.context().channel_keys_id);
-		monitor_signer.provide_channel_parameters(&self.context().channel_transaction_parameters);
-		let channel_monitor = ChannelMonitor::new(self.context().secp_ctx.clone(), monitor_signer,
-		                                          shutdown_script, self.context().get_holder_selected_contest_delay(),
-		                                          &self.context().destination_script, (funding_txo, funding_txo_script),
-		                                          &self.context().channel_transaction_parameters, self.context().is_outbound(),
-		                                          funding_redeemscript.clone(), self.context().channel_value_satoshis,
+		let obscure_factor = get_commitment_transaction_number_obscure_factor(&context.get_holder_pubkeys().payment_point, &context.get_counterparty_pubkeys().payment_point, context.is_outbound());
+		let shutdown_script = context.shutdown_scriptpubkey.clone().map(|script| script.into_inner());
+		let mut monitor_signer = signer_provider.derive_channel_signer(context.channel_value_satoshis, context.channel_keys_id);
+		monitor_signer.provide_channel_parameters(&context.channel_transaction_parameters);
+		let channel_monitor = ChannelMonitor::new(context.secp_ctx.clone(), monitor_signer,
+		                                          shutdown_script, context.get_holder_selected_contest_delay(),
+		                                          &context.destination_script, (funding_txo, funding_txo_script),
+		                                          &context.channel_transaction_parameters, context.is_outbound(),
+		                                          funding_redeemscript.clone(), context.channel_value_satoshis,
 		                                          obscure_factor,
-		                                          holder_commitment_tx, best_block, self.context().counterparty_node_id, self.context().channel_id());
+		                                          holder_commitment_tx, best_block, context.counterparty_node_id, context.channel_id());
 		channel_monitor.provide_initial_counterparty_commitment_tx(
 			counterparty_txid, Vec::new(),
 			counterparty_commitment_number,
-			self.context().counterparty_cur_commitment_point.unwrap(),
+			context.counterparty_cur_commitment_point.unwrap(),
 			counterparty_initial_commitment_tx.feerate_per_kw(),
 			counterparty_initial_commitment_tx.to_broadcaster_value_sat(),
 			counterparty_initial_commitment_tx.to_countersignatory_value_sat(),
@@ -8012,7 +8010,8 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 			self.context.channel_id(),
 			msg.signature, counterparty_initial_bitcoin_tx.txid,
 			self.context.cur_counterparty_commitment_transaction_number,
-			best_block, signer_provider, logger) {
+			best_block, signer_provider, logger
+		) {
 			Ok(channel_monitor) => channel_monitor,
 			Err(err) => return Err((self, err)),
 		};
@@ -8242,7 +8241,8 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 			ChannelId::v1_from_funding_outpoint(funding_txo),
 			msg.signature, counterparty_initial_commitment_tx.trust().txid(),
 			self.context.cur_counterparty_commitment_transaction_number + 1,
-			best_block, signer_provider, logger) {
+			best_block, signer_provider, logger
+		) {
 			Ok(channel_monitor) => channel_monitor,
 			Err(err) => return Err((self, err)),
 		};
