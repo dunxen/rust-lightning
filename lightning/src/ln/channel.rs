@@ -3840,7 +3840,6 @@ pub(super) struct DualFundingChannelContext {
 // Counterparty designates channel data owned by the another channel participant entity.
 pub(super) struct Channel<SP: Deref> where SP::Target: SignerProvider {
 	pub context: ChannelContext<SP>,
-	pub dual_funding_channel_context: Option<DualFundingChannelContext>,
 }
 
 #[cfg(any(test, fuzzing))]
@@ -8009,7 +8008,6 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 
 		let mut channel = Channel {
 			context: self.context,
-			dual_funding_channel_context: None,
 		};
 
 		let need_channel_ready = channel.check_get_channel_ready(0, logger).is_some();
@@ -8238,7 +8236,6 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 		// `ChannelMonitor`.
 		let mut channel = Channel {
 			context: self.context,
-			dual_funding_channel_context: None,
 		};
 		let need_channel_ready = channel.check_get_channel_ready(0, logger).is_some();
 		channel.monitor_updating_paused(false, false, need_channel_ready, Vec::new(), Vec::new(), Vec::new());
@@ -9595,7 +9592,6 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 				blocked_monitor_updates: blocked_monitor_updates.unwrap(),
 				is_manual_broadcast: is_manual_broadcast.unwrap_or(false),
 			},
-			dual_funding_channel_context: None,
 		})
 	}
 }
