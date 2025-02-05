@@ -1,3 +1,4 @@
+cargo-features = ["codegen-backend"]
 [workspace]
 resolver = "2"
 
@@ -38,8 +39,10 @@ opt-level = 2
 # here but ensure we keep LTO disabled as otherwise we're re-optimizing all our
 # dependencies every time we make any local changes.
 [profile.dev]
-opt-level = 1
-lto = "off"
+opt-level = 0
+lto = false
+debug = 0
+codegen-backend = "cranelift"
 
 [profile.release]
 opt-level = 3
