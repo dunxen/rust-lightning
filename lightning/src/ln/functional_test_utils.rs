@@ -63,7 +63,7 @@ use bitcoin::script::ScriptBuf;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
 use bitcoin::transaction::{self, Version as TxVersion};
 use bitcoin::transaction::{Transaction, TxIn, TxOut};
-use bitcoin::WPubkeyHash;
+use bitcoin::CompressedPublicKey;
 
 use crate::io;
 use crate::prelude::*;
@@ -1438,7 +1438,7 @@ fn internal_create_funding_transaction<'a, 'b, 'c>(
 /// Create test inputs for a funding transaction.
 /// Return the inputs (with prev tx), and the total witness weight for these inputs
 pub fn create_dual_funding_utxos_with_prev_txs(
-	node: &Node<'_, '_, '_>, utxo_values_in_satoshis: &[u64],
+	node: &Node<'_, '_, '_>, utxo_values_in_satoshis: &[u64], pubkey: &PublicKey,
 ) -> Vec<FundingTxInput> {
 	// Ensure we have unique transactions per node by using the locktime.
 	let tx = Transaction {
@@ -1454,7 +1454,7 @@ pub fn create_dual_funding_utxos_with_prev_txs(
 			.iter()
 			.map(|value_satoshis| TxOut {
 				value: Amount::from_sat(*value_satoshis),
-				script_pubkey: ScriptBuf::new_p2wpkh(&WPubkeyHash::all_zeros()),
+				script_pubkey: ScriptBuf::new_p2wpkh(&CompressedPublicKey(*pubkey).wpubkey_hash()),
 			})
 			.collect(),
 	};
@@ -1941,7 +1941,7 @@ pub fn do_check_spends<F: Fn(&bitcoin::transaction::OutPoint) -> Option<TxOut>>(
 		total_value_out += output.value.to_sat();
 	}
 	let min_fee = (tx.weight().to_wu() as u64 + 3) / 4; // One sat per vbyte (ie per weight/4, rounded up)
-													// Input amount - output amount = fee, so check that out + min_fee is smaller than input
+													 // Input amount - output amount = fee, so check that out + min_fee is smaller than input
 	assert!(total_value_out + min_fee <= total_value_in);
 	tx.verify(get_output).unwrap();
 }
